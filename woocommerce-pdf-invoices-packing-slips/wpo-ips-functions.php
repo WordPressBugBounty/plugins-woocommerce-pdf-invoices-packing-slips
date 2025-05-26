@@ -373,7 +373,7 @@ function wcpdf_log_error( string $message, string $level = 'error', ?\Throwable 
 	$message = $format_message( $message, $e );
 
 	if ( ! function_exists( 'wc_get_logger' ) ) {
-		error_log( '[WPO_WCPDF] ' . $message );
+		error_log( '[WPO_WCPDF] ' . $message ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 		return;
 	}
 
@@ -1099,7 +1099,7 @@ function wpo_wcpdf_dynamic_translate( string $string, string $textdomain ): stri
 
 	// If not translated yet, try native translate() first, then custom filters
 	if ( $translation === $string && function_exists( 'translate' ) ) {
-		$translation = translate( $string, $textdomain );
+		$translation = translate( $string, $textdomain ); // phpcs:ignore WordPress.WP.I18n.NonSingularStringLiteralText, WordPress.WP.I18n.NonSingularStringLiteralDomain, WordPress.WP.I18n.LowLevelTranslationFunction
 	}
 
 	// If still not translated, try custom filters
@@ -1548,7 +1548,7 @@ function wpo_wcpdf_format_country_address( string $country_code, array $address 
 	}
 
 	// Convert to HTML line breaks.
-	$formatted_address = nl2br( $formatted_address );
+	$formatted_address = nl2br( ltrim( $formatted_address, "\r\n" ) );
 
 	// Remove any newlines.
 	$formatted_address = str_replace( "\n", '', $formatted_address );

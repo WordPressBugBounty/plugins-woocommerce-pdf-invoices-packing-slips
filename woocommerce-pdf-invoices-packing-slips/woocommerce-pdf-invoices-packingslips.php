@@ -3,15 +3,15 @@
  * Plugin Name:          PDF Invoices & Packing Slips for WooCommerce
  * Requires Plugins:     woocommerce
  * Plugin URI:           https://wpovernight.com/downloads/woocommerce-pdf-invoices-packing-slips-bundle/
- * Description:          Create, print & email PDF or UBL Invoices & PDF Packing Slips for WooCommerce orders.
- * Version:              4.7.0
+ * Description:          Create, print & email PDF or Electronic Invoices & PDF Packing Slips for WooCommerce orders.
+ * Version:              5.6.0
  * Author:               WP Overnight
  * Author URI:           https://www.wpovernight.com
  * License:              GPLv2 or later
  * License URI:          https://opensource.org/licenses/gpl-license.php
  * Text Domain:          woocommerce-pdf-invoices-packing-slips
  * WC requires at least: 3.3
- * WC tested up to:      10.2
+ * WC tested up to:      10.4
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -22,7 +22,7 @@ if ( ! class_exists( 'WPO_WCPDF' ) ) :
 
 class WPO_WCPDF {
 
-	public $version              = '4.7.0';
+	public $version              = '5.6.0';
 	public $version_php          = '7.4';
 	public $version_woo          = '3.3';
 	public $version_wp           = '4.4';
@@ -66,6 +66,11 @@ class WPO_WCPDF {
 		$this->legacy_addons   = apply_filters( 'wpo_wcpdf_legacy_addons', array(
 			'ubl-woocommerce-pdf-invoices.php'     => 'UBL Invoices for WooCommerce',
 			'woocommerce-pdf-ips-number-tools.php' => 'PDF Invoices & Packing Slips for WooCommerce - Number Tools',
+			'woocommerce-pdf-ips-ubl-extender.php' => 'PDF Invoices & Packing Slips for WooCommerce - UBL Extender',
+			'wpo-ips-factur-x.php'                 => 'PDF Invoices & Packing Slips for WooCommerce - Factur-X',
+			'wpo-ips-cius-ro.php'                  => 'PDF Invoices & Packing Slips for WooCommerce - CIUS-RO',
+			'wpo-ips-xrechnung.php'                => 'PDF Invoices & Packing Slips for WooCommerce - XRechnung',
+			'wpo-ips-fatturapa.php'                => 'PDF Invoices & Packing Slips for WooCommerce - FatturaPA',
 		) );
 
 		$this->define( 'WPO_WCPDF_VERSION', $this->version );
@@ -148,9 +153,13 @@ class WPO_WCPDF {
 		// plugin legacy class mapping
 		include_once $this->plugin_path() . '/wpo-ips-legacy-class-alias-mapping.php';
 
+		// deprecated
+		include_once $this->plugin_path() . '/wpo-ips-deprecated-hooks.php';
+		include_once $this->plugin_path() . '/wpo-ips-deprecated-functions.php';
+
 		// plugin functions
 		include_once $this->plugin_path() . '/wpo-ips-functions.php';
-		include_once $this->plugin_path() . '/wpo-ips-functions-ubl.php';
+		include_once $this->plugin_path() . '/wpo-ips-functions-edi.php';
 
 		// Compatibility classes
 		$this->third_party_plugins = \WPO\IPS\Compatibility\ThirdPartyPlugins::instance();
@@ -167,6 +176,9 @@ class WPO_WCPDF {
 		$this->frontend            = \WPO\IPS\Frontend::instance();
 		$this->install             = \WPO\IPS\Install::instance();
 		$this->font_synchronizer   = \WPO\IPS\FontSynchronizer::instance();
+
+		// EDI classes
+		\WPO\IPS\EDI\Peppol::instance();
 	}
 
 	/**
@@ -372,7 +384,7 @@ class WPO_WCPDF {
 			// validate nonce
 			if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_REQUEST['_wpnonce'] ) ), 'protect_pdf_directory_nonce' ) ) {
 				wcpdf_log_error( 'You do not have sufficient permissions to perform this action: wpo_wcpdf_protect_pdf_directory' );
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			} else {
 				$this->main->generate_random_string();
@@ -381,7 +393,7 @@ class WPO_WCPDF {
 				$this->main->copy_directory( $old_path, $new_path );
 				// save option to hide nginx notice
 				update_option( 'wpo_wcpdf_hide_nginx_notice', true );
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			}
 		}
@@ -391,11 +403,11 @@ class WPO_WCPDF {
 			// validate nonce
 			if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_REQUEST['_wpnonce'] ) ), 'hide_nginx_notice_nonce' ) ) {
 				wcpdf_log_error( 'You do not have sufficient permissions to perform this action: wpo_wcpdf_hide_nginx_notice' );
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			} else {
 				update_option( 'wpo_wcpdf_hide_nginx_notice', true );
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			}
 		}
@@ -431,11 +443,11 @@ class WPO_WCPDF {
 			// validate nonce
 			if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_REQUEST['_wpnonce'] ) ), 'hide_mailpoet_notice_nonce' ) ) {
 				wcpdf_log_error( 'You do not have sufficient permissions to perform this action: wpo_wcpdf_hide_mailpoet_notice' );
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			} else {
 				update_option( 'wpo_wcpdf_hide_mailpoet_notice', true );
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			}
 		}
@@ -468,11 +480,11 @@ class WPO_WCPDF {
 			// validate nonce
 			if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_REQUEST['_wpnonce'] ) ), 'hide_rtl_notice_nonce' ) ) {
 				wcpdf_log_error( 'You do not have sufficient permissions to perform this action: wpo_wcpdf_hide_rtl_notice' );
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			} else {
 				update_option( 'wpo_wcpdf_hide_rtl_notice', true );
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			}
 		}
@@ -484,6 +496,10 @@ class WPO_WCPDF {
 	 * @return void
 	 */
 	public function yearly_reset_action_missing_notice(): void {
+		if ( empty( $this->settings ) || ! method_exists( $this->settings, 'maybe_schedule_yearly_reset_numbers' ) ) {
+			return;
+		}
+
 		if ( ! $this->settings->maybe_schedule_yearly_reset_numbers() ) {
 			return;
 		}
@@ -518,7 +534,7 @@ class WPO_WCPDF {
 				wcpdf_log_error( 'Yearly reset numbering system rescheduled!', 'info' );
 			}
 
-			wp_redirect( 'admin.php?page=wpo_wcpdf_options_page&tab=debug&section=status' );
+			wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page&tab=debug&section=status' ) );
 			exit;
 		}
 	}
@@ -606,7 +622,7 @@ class WPO_WCPDF {
 					delete_transient( $transient_name );
 				}
 
-				wp_redirect( 'admin.php?page=wpo_wcpdf_options_page' );
+				wp_safe_redirect( admin_url( 'admin.php?page=wpo_wcpdf_options_page' ) );
 				exit;
 			}
 		}
@@ -622,8 +638,17 @@ class WPO_WCPDF {
 		$dismiss_arg    = 'wpo_wcpdf_dismiss_unstable_option_announcement';
 		$nonce_action   = 'wcpdf_dismiss_unstable_option_announcement';
 
+		// Fallback if wc_string_to_bool() is unavailable
+		$dismiss_value = get_option( $dismiss_option, 'no' );
+		if ( function_exists( 'wc_string_to_bool' ) ) {
+			$already_dismissed = wc_string_to_bool( (string) $dismiss_value );
+		} else {
+			// simple string check as a fallback
+			$already_dismissed = ( 'yes' === (string) $dismiss_value );
+		}
+
 		// Bail if already dismissed or user cannot manage settings
-		if ( wc_string_to_bool( get_option( $dismiss_option ) ) || ! $this->settings->user_can_manage_settings() ) {
+		if ( $already_dismissed || ! $this->settings->user_can_manage_settings() ) {
 			return;
 		}
 
@@ -635,7 +660,7 @@ class WPO_WCPDF {
 				wcpdf_log_error( 'Invalid nonce while dismissing unstable version feature notice.' );
 			}
 
-			wp_redirect( remove_query_arg( array( $dismiss_arg, '_wpnonce' ) ) );
+			wp_safe_redirect( remove_query_arg( array( $dismiss_arg, '_wpnonce' ) ) );
 			exit;
 		}
 
@@ -691,7 +716,7 @@ class WPO_WCPDF {
 		// Handle dismissal
 		if ( isset( $_GET[ $hide_version_arg ], $_GET['_wpnonce'] ) ) {
 			$nonce = sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) );
-			
+
 			if ( wp_verify_nonce( $nonce, 'wcpdf_hide_unstable_version' ) ) {
 				update_option( 'wpo_wcpdf_unstable_version_state', array(
 					'tag'       => $current_tag,
@@ -700,22 +725,22 @@ class WPO_WCPDF {
 			} else {
 				wcpdf_log_error( 'Invalid nonce while hiding unstable version notice.' );
 			}
-			
+
 			$redirect_url = remove_query_arg( array( $hide_version_arg, '_wpnonce' ), wp_get_referer() );
-			
+
 			if ( ! $redirect_url ) {
 				$redirect_url = admin_url(); // Fallback
 			}
-			
+
 			wp_safe_redirect( $redirect_url );
 			exit;
 		}
-		
+
 		$hide_url = wp_nonce_url(
 			add_query_arg( $hide_version_arg, 1, wp_get_referer() ?: admin_url() ),
 			'wcpdf_hide_unstable_version'
 		);
-		
+
 		// Display the notice
 		?>
 		<div class="notice notice-info">

@@ -56,17 +56,6 @@ jQuery( function( $ ) {
 		}
 	} ).trigger( 'change' );
 
-	// disable encrypted pdf option for non UBL 2.1 formats
-	$( "[name='wpo_wcpdf_documents_settings_invoice_ubl[ubl_format]']" ).on( 'change', function( event ) {
-		let $encryptedPdfCheckbox = $( this ).closest( 'form' ).find( "[name='wpo_wcpdf_documents_settings_invoice_ubl[include_encrypted_pdf]']" );
-
-		if ( $( this ).val() !== 'ubl_2_1' ) {
-			$encryptedPdfCheckbox.prop( 'checked', false ).prop( 'disabled', true );
-		} else {
-			$encryptedPdfCheckbox.prop( 'disabled', false );
-		}
-	} ).trigger( 'change' );
-
 	// enable settings document switch
 	$( '.wcpdf_document_settings_sections > h2' ).on( 'click', function() {
 		$( this ).parent().find( 'ul' ).toggleClass( 'active' );
@@ -417,12 +406,13 @@ jQuery( function( $ ) {
 		);
 
 		return $.ajax( {
-			url: wpo_wcpdf_admin.ajaxurl,
-			type: 'POST',
+			url:      wpo_wcpdf_admin.ajaxurl,
+			type:     'POST',
 			dataType: 'json',
 			data: {
 				action: 'wcpdf_get_country_states',
-				country: selectedCountry
+				country: selectedCountry,
+				security: wpo_wcpdf_admin.nonce,
 			},
 			success: function( response ) {
 				$state.empty();
@@ -467,7 +457,7 @@ jQuery( function( $ ) {
 	}
 
 	function showSaveBtn( event ) {
-		$('.preview-data-wrapper .save-settings p').css('margin-right', '0');
+		$( '.preview-data-wrapper .save-settings p' ).css( 'margin-right', '0' );
 	}
 
 	// Submit settings form when clicking on secondary save button
@@ -575,22 +565,31 @@ jQuery( function( $ ) {
 			},
 			success: function( response, textStatus, jqXHR ) {
 				if ( response.data.error ) {
-					$( '#'+canvasId ).remove();
-					$preview.append( '<div class="notice notice-error inline"><p>'+response.data.error+'</p></div>' );
+					$( '#' + canvasId ).remove();
+					$preview.append( '<div class="notice notice-warning inline"><p>' + response.data.error + '</p></div>' );
 				} else if ( response.data.preview_data && response.data.output_format ) {
-					$( '#'+canvasId ).remove();
+					$( '#' + canvasId ).remove();
 
 					switch ( response.data.output_format ) {
 						default:
 						case 'pdf':
-							$preview.append( '<canvas id="'+canvasId+'" style="width:100%;"></canvas>' );
+							$preview.append( '<canvas id="' + canvasId + '" style="width:100%;"></canvas>' );
 							renderPdf( worker, canvasId, response.data.preview_data );
 							break;
-						case 'ubl':
-							let xml         = response.data.preview_data;
-							let xml_escaped = xml.replace( /&/g,'&amp;' ).replace( /</g,'&lt;' ).replace( />/g,'&gt;' ).replace( / /g, '&nbsp;' ).replace( /\n/g,'<br />' );
-							$preview.html( '<div id="preview-ubl">'+xml_escaped+'</div>' );
+						case 'xml': {
+							const rawXml = response.data.preview_data;
+
+							// pretty-print xmlns declarations:
+							const pretty = rawXml.replace( /\s+(xmlns(?::[\w.-]+)?=)/g, '\n $1' );
+
+							// build <pre><code> safely
+							const $code = $( '<code>', { class: 'language-xml' } ).text( pretty );
+							$preview.empty().append( $( '<pre>' ).append( $code ) );
+
+							// highlight just this element
+							Prism.highlightElement( $code[0] );
 							break;
+						}
 					}
 				}
 
@@ -599,8 +598,8 @@ jQuery( function( $ ) {
 			error: function( jqXHR, textStatus, errorThrown ) {
 				if ( textStatus != 'abort' ) {
 					let errorMessage = jqXHR.status + ': ' + jqXHR.statusText
-					$( '#'+canvasId ).remove();
-					$preview.append( '<div class="notice notice-error inline"><p>'+errorMessage+'</p></div>' );
+					$( '#' + canvasId ).remove();
+					$preview.append( '<div class="notice notice-warning inline"><p>' + errorMessage + '</p></div>' );
 					$preview.unblock();
 				}
 			},
@@ -710,9 +709,9 @@ jQuery( function( $ ) {
 
 	function settingsAccordion() {
 		// Get current tab.
-		const params       = new URLSearchParams( window.location.search );
-		const allowedTabs  = [ 'general', 'documents' ];
-		const tab          = params.get( 'tab' ) || 'general';
+		const params      = new URLSearchParams( window.location.search );
+		const allowedTabs = [ 'general', 'documents', 'debug' ];
+		const tab         = params.get( 'tab' ) || 'general';
 
 		if ( ! allowedTabs.includes( tab ) ) {
 			return;
@@ -721,39 +720,190 @@ jQuery( function( $ ) {
 		const tabsMainCategory = {
 			general   : 'display',
 			documents : 'general',
+			debug     : 'filesystem_access' // Default open section for Advanced/Debug tab
 		};
 
-		// Collapse all but the main category for this tab.
-		$( '.settings_category' )
-			.not( '#' + tabsMainCategory[ tab ] )
-			.find( '.form-table' )
-			.hide();
-
 		const sections = $( '.settings_category h2' );
+		
+		if ( sections.length === 0 ) {
+			return; // No sections found
+		}
 
-		// Restore accordion state from localStorage.
+		// Accessibility attributes for accordion headers and panels
 		sections.each( function ( index ) {
-			const open = localStorage.getItem( `wcpdf_${tab}_settings_accordion_state_${index}` ) === 'true';
-			$( this ).toggleClass( 'active', open ).next( '.form-table' ).toggle( open );
+			const $header   = $( this );
+			const $panel    = $header.next( '.form-table' );
+			const $category = $header.parent( '.settings_category' );
+			const idBase    = $category.attr( 'id' ) || $header.attr( 'id' ) || `wcpdf_${tab}_section_${index}`;
+			
+			// Ensure header has an id and compute explicit ids
+			if ( ! $header.attr( 'id' ) ) {
+				$header.attr( 'id', `${idBase}_header` );
+			}
+			const headerElementId = $header.attr( 'id' );
+			const panelId         = `${idBase}_panel`;
+
+			$header.attr( {
+				'role': 'button',
+				'tabindex': 0,
+				'aria-controls': panelId
+			} );
+
+			$panel.attr( {
+				'id': panelId,
+				'role': 'region',
+				'aria-labelledby': headerElementId
+			} );
 		} );
 
-		// Toggle on click and persist state.
-		sections.on( 'click', function () {
-			const index = sections.index( this );
-			$( this ).toggleClass( 'active' )
-					 .next( '.form-table' )
-					 .slideToggle( 'fast', function () {
-						 localStorage.setItem(
-							 `wcpdf_${tab}_settings_accordion_state_${index}`,
-							 $( this ).is( ':visible' )
-						 );
-					 } );
+		// Initialize accordion state
+		sections.each( function ( index ) {
+			const $header    = $( this );
+			const $category  = $header.parent( '.settings_category' );
+			const categoryId = $category.attr( 'id' ) || `wcpdf_${tab}_section_${index}`;
+			const $panel     = $header.next( '.form-table' );
+			
+			// Check localStorage for saved state
+			const stored = localStorage.getItem( `wcpdf_${tab}_settings_accordion_state_${categoryId}` );
+			let shouldOpen = false;
+
+			if ( stored !== null ) {
+				// User has previously interacted with this section - use saved state
+				shouldOpen = stored === 'true';
+			} else if ( tabsMainCategory[ tab ] && categoryId === tabsMainCategory[ tab ] ) {
+				// First visit - open the default main category for this tab
+				shouldOpen = true;
+			}
+			// else: keep collapsed (shouldOpen = false)
+
+			// Set initial state
+			if ( shouldOpen ) {
+				$header.addClass( 'active' ).attr( 'aria-expanded', true );
+				$panel.show().attr( 'aria-hidden', 'false' );
+			} else {
+				$header.removeClass( 'active' ).attr( 'aria-expanded', false );
+				$panel.hide().attr( 'aria-hidden', 'true' );
+			}
+		} );
+
+		// Toggle section on click
+		function toggleSection( header ) {
+			const $header    = $( header );
+			const categoryId = $header.parent( '.settings_category' ).attr( 'id' );
+			const $panel     = $header.next( '.form-table' );
+			const willOpen   = ! $panel.is( ':visible' );
+
+			$header.toggleClass( 'active', willOpen ).attr( 'aria-expanded', willOpen );
+
+			$panel.stop( true, false ).slideToggle( {
+				duration: 300,
+				easing: 'swing',
+				complete: function () {
+					const isVisible = $( this ).is( ':visible' );
+					$( this ).attr( 'aria-hidden', isVisible ? 'false' : 'true' );
+					if ( categoryId ) {
+						localStorage.setItem( `wcpdf_${tab}_settings_accordion_state_${categoryId}`, isVisible );
+					}
+				}
+			} );
+		}
+
+		// Bind click events
+		sections.off( 'click' ).on( 'click', function () {
+			toggleSection( this );
+		} );
+
+		// Keyboard accessibility
+		sections.off( 'keydown' ).on( 'keydown', function ( e ) {
+			if ( e.key === 'Enter' || e.key === ' ' ) {
+				e.preventDefault();
+				toggleSection( this );
+			}
 		} );
 	}
 
+	// Initialize accordion
 	settingsAccordion();
-
 	//----------> /Settings Accordion <----------//
+	
+	//----------> Conditional Visibility <----------//
+	const bound = new Set();
+
+	$( '[data-show_for_option_name]' ).each( function () {
+		const opt = $( this ).data( 'show_for_option_name' );
+		if ( bound.has( opt ) ) {
+			return;
+		}
+
+		$( document ).on( 'change', `[name="${opt}"], [name="${opt}[]"]`, toggle_conditional_visibility );
+		$( `[name="${opt}"], [name="${opt}[]"]` ).each( function () {
+			toggle_conditional_visibility( { target: this } );
+		} );
+		bound.add( opt );
+	} );
+
+	function toggle_conditional_visibility( e ) {
+		const $this  = $( e.target );
+		let name     = $this.prop( 'name' ).replace( '[]', '' ); // normalize multiselect
+		let value    = $this.val();
+		let checkbox = false;
+
+		if ( $this.is( ':checkbox' ) ) {
+			value    = $this.is( ':checked' );
+			checkbox = true;
+		}
+
+		$( "[data-show_for_option_name='" + name + "']" ).each( function() {
+			let show       = false;
+			let show_for   = $( this ).data( 'show_for_option_values' );
+			let keep_value = $( this ).data( 'keep_current_value' );
+			
+			if ( checkbox ) {
+				show = value; // for checkboxes, checked = show
+			} else if ( Array.isArray( value ) ) { // Multiselect
+				show = value.some( item => show_for.includes( item ) );
+			} else {
+				show = show_for.includes( value );
+			}
+
+			let $row = $( this ).closest( 'tr' );
+
+			if ( show ) {
+				$row.show();
+
+				if ( checkbox ) {
+					$row.find( ':input[type=checkbox]' ).val( '1' );
+				}
+			} else {
+				$row.hide()
+					.find( ':input' ).each( function () {
+						const $input = $( this );
+						
+						// Don't reset value
+						if ( keep_value ) {
+							return;
+						}
+
+						// Reset the input value
+						if ( $input.is( 'select' ) ) {
+							if ( $input.prop( 'multiple' ) ) {
+								$input.val( [] );
+							} else {
+								$input.prop( 'selectedIndex', 0 );
+							}
+						} else if ( $input.is( ':checkbox' ) ) {
+							$input.prop( 'checked', false );
+						} else {
+							$input.val( '' );
+						}
+
+						$input.trigger( 'change' );
+					} );
+			}
+		} );
+	}
+	//----------> /Conditional Visibility <----------//
+	
 	//----------> Sync Address <----------//
 
 	$( '#wpo-wcpdf-settings .sync-address' ).on( 'click', function( event ) {
@@ -818,5 +968,5 @@ jQuery( function( $ ) {
 	} );
 
 	//----------> /Sync Address <----------//
-
+	
 } );

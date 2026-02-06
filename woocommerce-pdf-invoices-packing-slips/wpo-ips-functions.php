@@ -129,13 +129,19 @@ function wcpdf_get_bulk_actions() {
 
 	foreach ( $documents as $document ) {
 		foreach ( $document->output_formats as $output_format ) {
+			if ( 'xml' === $output_format && ! \wpo_ips_edi_is_available() ) {
+				continue;
+			}
+			
 			$slug = $document->get_type();
+			
 			if ( 'pdf' !== $output_format ) {
 				$slug .= "_{$output_format}";
 			}
 
 			if ( $document->is_enabled( $output_format ) ) {
-				$actions[$slug] = strtoupper( $output_format ) . ' ' . $document->get_title();
+				$prefix           = strtoupper( $output_format ) . ' ';
+				$actions[ $slug ] = $prefix . $document->get_title();
 			}
 		}
 	}
@@ -162,34 +168,6 @@ function wcpdf_get_pdf_maker( $html, $settings = array(), $document = null ) {
 	$class = apply_filters( 'wpo_wcpdf_pdf_maker', $class );
 
 	return new $class( $html, $settings, $document );
-}
-
-/**
- * Get UBL Maker
- * Use wpo_wcpdf_ubl_maker filter to change the UBL class (which can wrap another UBL library).
- *
- * @return WPO\IPS\Makers\UBLMaker
- */
-function wcpdf_get_ubl_maker() {
-	$class = '\\WPO\\IPS\\Makers\\UBLMaker';
-
-	if ( ! class_exists( $class ) ) {
-		include_once( WPO_WCPDF()->plugin_path() . '/includes/Makers/UBLMaker.php' );
-	}
-
-	$class = apply_filters( 'wpo_wcpdf_ubl_maker', $class );
-
-	return new $class();
-}
-
-/**
- * Check if UBL is available
- *
- * @return bool
- */
-function wcpdf_is_ubl_available(): bool {
-	// Check `sabre/xml` library here: https://packagist.org/packages/sabre/xml
-	return apply_filters( 'wpo_wcpdf_ubl_available', WPO_WCPDF()->is_dependency_version_supported( 'php' ) );
 }
 
 /**
@@ -230,22 +208,6 @@ function wcpdf_pdf_headers( string $filename, string $mode = 'inline', ?string $
 	do_action( 'wpo_wcpdf_headers', $filename, $mode, $pdf );
 }
 
-function wcpdf_ubl_headers( $filename, $size ) {
-	$charset = apply_filters( 'wcpdf_ubl_headers_charset', 'UTF-8' );
-
-	header( 'Content-Description: File Transfer' );
-	header( 'Content-Type: text/xml; charset=' . $charset );
-	header( 'Content-Disposition: attachment; filename=' . $filename );
-	header( 'Content-Transfer-Encoding: binary' );
-	header( 'Connection: Keep-Alive' );
-	header( 'Expires: 0' );
-	header( 'Cache-Control: must-revalidate, post-check=0, pre-check=0' );
-	header( 'Pragma: public' );
-	header( 'Content-Length: ' . $size );
-
-	do_action( 'wpo_after_ubl_headers', $filename, $size );
-}
-
 /**
  * Get the document file
  *
@@ -283,7 +245,13 @@ function wcpdf_get_document_file( object $document, string $output_format = 'pdf
 		return wcpdf_error_handling( $error_message, $error_handling, true, 'critical' );
 	}
 
-	$function = "get_document_{$output_format}_attachment"; // 'get_document_pdf_attachment' or 'get_document_ubl_attachment'
+	/**
+	 * Calls a dynamic attachment function based on the output format.
+	 *
+	 * @uses get_document_pdf_attachment()
+	 * @uses get_document_xml_attachment()
+	 */
+	$function = "get_document_{$output_format}_attachment";
 
 	if ( ! is_callable( array( WPO_WCPDF()->main, $function ) ) ) {
 		$error_message = "The {$function} method is not callable on WPO_WCPDF()->main.";
@@ -304,7 +272,7 @@ function wcpdf_get_document_file( object $document, string $output_format = 'pdf
 function wcpdf_get_document_output_format_extension( string $output_format ): string {
 	$output_formats = array(
 		'pdf' => '.pdf',
-		'ubl' => '.xml',
+		'xml' => '.xml',
 	);
 
 	return isset( $output_formats[ $output_format ] ) ? $output_formats[ $output_format ] : $output_formats['pdf'];
@@ -351,9 +319,10 @@ function wcpdf_deprecated_function( $function, $version, $replacement = null ) {
  * @param string           $message Error message to log.
  * @param string           $level   Log level: debug, info, notice, warning, error, critical, alert, emergency.
  * @param \Throwable|null  $e       (Optional) Exception or error object.
+ * @param string           $source  Source of the log entry, defaults to 'wpo-wcpdf'.
  * @return void
  */
-function wcpdf_log_error( string $message, string $level = 'error', ?\Throwable $e = null ): void {
+function wcpdf_log_error( string $message, string $level = 'error', ?\Throwable $e = null, string $source = 'wpo-wcpdf' ): void {
 	/**
 	 * Appends exception details to the message if available.
 	 *
@@ -375,12 +344,12 @@ function wcpdf_log_error( string $message, string $level = 'error', ?\Throwable 
 	$message = $format_message( $message, $e );
 
 	if ( ! function_exists( 'wc_get_logger' ) ) {
-		error_log( '[WPO_WCPDF] ' . $message ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		error_log( '[' . $source . '] ' . $message ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 		return;
 	}
 
 	$logger  = wc_get_logger();
-	$context = array( 'source' => 'wpo-wcpdf' );
+	$context = array( 'source' => $source );
 
 	$logger->log( $level, $message, $context );
 }
@@ -451,23 +420,25 @@ function wcpdf_date_format( $document = null, $date_type = null ) {
 }
 
 /**
- * Catch MySQL errors
- *
+ * Catch MySQL errors from $wpdb and log them.
+ * 
  * Inspired from here: https://github.com/johnbillion/query-monitor/blob/d5b622b91f18552e7105e62fa84d3102b08975a4/collectors/db_queries.php#L125-L280
  *
  * With SAVEQUERIES constant defined as 'false', '$wpdb->queries' is empty and '$EZSQL_ERROR' is used instead.
  * Using the Query Monitor plugin, the SAVEQUERIES constant is defined as 'true'
  * More info about this constant can be found here: https://wordpress.org/support/article/debugging-in-wordpress/#savequeries
  *
- * @param  object $wpdb
- * @return array  errors found
+ * @param  \wpdb  $wpdb
+ * @param  string $context Optional prefix for messages (e.g. __METHOD__).
+ * @return array  List of error strings logged.
  */
-function wcpdf_catch_db_object_errors( $wpdb ) {
+function wcpdf_catch_db_object_errors( \wpdb $wpdb, string $context = '' ): array {
 	global $EZSQL_ERROR;
 
-	$errors = array();
+	static $seen = array(); // avoid duplicate logs in the same request
+	$errors      = array();
 
-	// using '$wpdb->queries'.
+	// Using $wpdb->queries (if SAVEQUERIES is true and a collector populates results)
 	if ( ! empty( $wpdb->queries ) && is_array( $wpdb->queries ) ) {
 		foreach ( $wpdb->queries as $query ) {
 			$result = isset( $query['result'] ) ? $query['result'] : null;
@@ -478,18 +449,27 @@ function wcpdf_catch_db_object_errors( $wpdb ) {
 			}
 		}
 	}
-	// fallback to '$EZSQL_ERROR'.
+
+	// Fallback to $EZSQL_ERROR (wpdb::print_error collects here)
 	if ( empty( $errors ) && ! empty( $EZSQL_ERROR ) && is_array( $EZSQL_ERROR ) ) {
 		foreach ( $EZSQL_ERROR as $error ) {
-			$errors[] = $error['error_str'];
+			if ( ! empty( $error['error_str'] ) ) {
+				$errors[] = $error['error_str'];
+			}
 		}
 	}
 
-	// log errors.
-	if ( ! empty( $errors ) ) {
-		foreach ( $errors as $error_message ) {
-			wcpdf_log_error( $error_message, 'critical' );
+	// Log (with optional context) and dedupe per request
+	foreach ( $errors as $msg ) {
+		$line = '' !== $context ? "{$context}: {$msg}" : $msg;
+		$key  = md5( $line );
+		
+		if ( isset( $seen[ $key ] ) ) {
+			continue;
 		}
+		
+		$seen[ $key ] = true;
+		wcpdf_log_error( $line, 'critical' );
 	}
 
 	return $errors;
@@ -792,7 +772,10 @@ function wpo_wcpdf_get_image_mime_type( string $src ): string {
 
 		if ( $finfo ) {
 			$mime_type = finfo_file( $finfo, $src );
-			finfo_close( $finfo );
+			
+			if ( PHP_VERSION_ID < 80100 ) {
+				finfo_close( $finfo );
+			}
 		}
 	}
 
@@ -832,7 +815,10 @@ function wpo_wcpdf_get_image_mime_type( string $src ): string {
 
 				if ( $finfo ) {
 					$mime_type = finfo_buffer( $finfo, $image_data );
-					finfo_close( $finfo );
+					
+					if ( PHP_VERSION_ID < 80100 ) {
+						finfo_close( $finfo );
+					}
 				}
 			}
 		}
@@ -1162,9 +1148,11 @@ function wpo_wcpdf_order_is_vat_exempt( \WC_Abstract_Order $order ): bool {
 
 	// Fallback to customer VAT exemption if order is not exempt
 	if ( ! $is_vat_exempt && apply_filters( 'wpo_wcpdf_order_vat_exempt_fallback_to_customer', true, $order ) ) {
-		$customer_id = $order->get_customer_id();
+		$customer_id  = is_callable( array( $order, 'get_customer_id' ) )
+			? $order->get_customer_id()
+			: 0;
 
-		if ( $customer_id ) {
+		if ( $customer_id > 0 ) {
 			$customer      = new \WC_Customer( $customer_id );
 			$is_vat_exempt = $customer->is_vat_exempt();
 		}
@@ -1195,6 +1183,7 @@ function wpo_wcpdf_order_is_vat_exempt( \WC_Abstract_Order $order ): bool {
  */
 function wpo_wcpdf_get_order_customer_vat_number( \WC_Abstract_Order $order ): ?string {
 	$vat_meta_keys = apply_filters( 'wpo_wcpdf_order_customer_vat_number_meta_keys', array(
+		'vat_number',             // Manually added to the order's custom fields
 		'_vat_number',            // WooCommerce EU VAT Number
 		'_billing_vat_number',    // WooCommerce EU VAT Number 2.3.21+
 		'VAT Number',             // WooCommerce EU VAT Compliance
@@ -1205,6 +1194,7 @@ function wpo_wcpdf_get_order_customer_vat_number( \WC_Abstract_Order $order ): ?
 		'_billing_vat_id',        // Germanized Pro
 		'_shipping_vat_id',       // Germanized Pro (alternative)
 		'_billing_dic',           // EU/UK VAT Manager for WooCommerce
+		'_billing_eu_vat',        // WooCommerce Eu Vat & B2B (WCEV)
 	), $order );
 
 	$vat_number = null;
@@ -1359,7 +1349,7 @@ function wpo_wcpdf_get_latest_releases_from_github( string $owner = 'wpovernight
 		$tag  = $release['tag_name'];
 		$name = ltrim( $release['name'], 'v' );
 
-		if ( preg_match( '/-pr\d+/i', $tag ) ) {
+		if ( preg_match( '/-(pr|i)\d+(?:\.\d+)?/i', $tag ) ) {
 			continue;
 		}
 
@@ -1433,63 +1423,6 @@ function wpo_wcpdf_get_latest_plugin_version( string $plugin_slug ) {
 
 	// No update available or plugin not found
 	return false;
-}
-
-/**
- * Write UBL file
- *
- * @param \WPO\IPS\Documents\OrderDocument $document
- * @param bool $attachment
- * @param bool $contents_only
- *
- * @return string|false
- */
-function wpo_ips_write_ubl_file( \WPO\IPS\Documents\OrderDocument $document, bool $attachment = false, bool $contents_only = false ) {
-	$ubl_maker = wcpdf_get_ubl_maker();
-
-	if ( ! $ubl_maker ) {
-		return wcpdf_error_handling( 'UBL Maker not available. Cannot write UBL file.' );
-	}
-
-	if ( $attachment ) {
-		$tmp_path = WPO_WCPDF()->main->get_tmp_path( 'attachments' );
-
-		if ( ! $tmp_path ) {
-			return wcpdf_error_handling( 'Temporary path not available. Cannot write UBL file.' );
-		}
-
-		$ubl_maker->set_file_path( $tmp_path );
-	}
-
-	$ubl_document = new \WPO\IPS\UBL\Documents\UblDocument();
-	$ubl_document->set_order_document( $document );
-
-	$builder  = new \WPO\IPS\UBL\Builders\SabreBuilder();
-	$contents = apply_filters( 'wpo_ips_ubl_contents',
-		$builder->build( $ubl_document ),
-		$ubl_document,
-		$document
-	);
-
-	if ( empty( $contents ) ) {
-		return wcpdf_error_handling( 'Failed to build UBL contents.' );
-	}
-
-	if ( $contents_only ) {
-		return $contents;
-	}
-
-	$filename = apply_filters( 'wpo_ips_ubl_filename',
-		$document->get_filename(
-			'download',
-			array( 'output' => 'ubl' )
-		),
-		$document
-	);
-
-	$full_filename = $ubl_maker->write( $filename, $contents );
-
-	return $full_filename;
 }
 
 /**
@@ -1616,6 +1549,25 @@ function wpo_wcpdf_format_address( array $address ): string {
 	$formatted_address = str_replace( "\n", '', $formatted_address );
 
 	return esc_html( $formatted_address );
+}
+
+/**
+ * Determines whether a specific document type is using historical settings
+ * instead of the latest settings.
+ *
+ * @param string $document_type The document type slug (e.g. 'invoice', 'packing-slip').
+ * @return bool True if the document is using historical settings, false if using the latest settings.
+ */
+function wpo_wcpdf_is_document_using_historical_settings( string $document_type ): bool {
+	$document_settings = get_option( 'wpo_wcpdf_documents_settings_' . $document_type, array() );
+	$is_using          = true;
+	
+	// this setting is inverted on the frontend so that it needs to be actively/purposely enabled to be used
+	if ( ! empty( $document_settings ) && isset( $document_settings['use_latest_settings'] ) ) {
+		$is_using = false;
+	}
+	
+	return apply_filters( 'wpo_wcpdf_is_document_using_historical_settings', $is_using, $document_settings, $document_type );
 }
 
 
@@ -1786,4 +1738,341 @@ function wpo_ips_display_item_meta( \WC_Order_Item $item, array $args = array() 
 	} else {
 		return $html;
 	}
+}
+
+/**
+ * Check if the order has a local pickup shipping method.
+ *
+ * @param \WC_Abstract_Order $order
+ *
+ * @return bool
+ */
+function wpo_ips_order_has_local_pickup_method( \WC_Abstract_Order $order ): bool {
+	$has_local_pickup_method = false;
+	
+	if ( $order instanceof \WC_Order_Refund ) {
+		return $has_local_pickup_method;
+	}
+	
+	if ( ! class_exists( '\Automattic\WooCommerce\Utilities\ArrayUtil' ) ) {
+		return $has_local_pickup_method;
+	}
+	
+	$local_pickup_methods = apply_filters( 'woocommerce_local_pickup_methods', array( 'legacy_local_pickup', 'local_pickup' ) );
+	$shipping_method_ids  = \Automattic\WooCommerce\Utilities\ArrayUtil::select( $order->get_shipping_methods(), 'get_method_id', \Automattic\WooCommerce\Utilities\ArrayUtil::SELECT_BY_OBJECT_METHOD );
+	
+	if ( count( array_intersect( $shipping_method_ids, $local_pickup_methods ) ) > 0 ) {
+		$has_local_pickup_method = true;
+	}
+	
+	return $has_local_pickup_method;
+}
+
+/**
+ * Add multiple filters.
+ * 
+ * @param array $filters Array of filters to add.
+ * @return void
+ */
+function wpo_ips_add_filters( array $filters ): void {
+	foreach ( $filters as $filter ) {
+		$args = wpo_ips_normalize_filter_args( $filter );
+		if ( $args['is_valid'] && ! empty( $args['callback'] ) ) {
+			add_filter( $args['hook_name'], $args['callback'], $args['priority'], $args['accepted_args'] );
+		}
+	}
+}
+
+/**
+ * Remove multiple filters.
+ * 
+ * @param array $filters Array of filters to remove.
+ * @return void
+ */
+function wpo_ips_remove_filters( array $filters ): void {
+	foreach ( $filters as $filter ) {
+		$args = wpo_ips_normalize_filter_args( $filter );
+		if ( $args['is_valid'] && ! empty( $args['callback'] ) ) {
+			remove_filter( $args['hook_name'], $args['callback'], $args['priority'] );
+		}
+	}
+}
+
+/**
+ * Normalize filter arguments.
+ * 
+ * @param array $filter Filter arguments.
+ * @return array
+ */
+function wpo_ips_normalize_filter_args( array $filter ): array {
+	$args      = array_values( $filter );
+	$hook_name = '';
+	$callback  = '';
+	$is_valid  = true;
+	
+	// Validate minimum array structure
+	if ( count( $args ) < 2 ) {
+		wcpdf_log_error( 'Filter array must contain at least hook name and callback.', 'critical' );
+		$is_valid = false;
+	} else {
+		// Validate and sanitize hook name
+		$hook_name = isset( $args[0] ) ? sanitize_text_field( $args[0] ) : '';
+		if ( empty( $hook_name ) ) {
+			wcpdf_log_error( 'Empty or invalid hook name provided for filter.', 'critical' );
+			$is_valid = false;
+		}
+		
+		// Validate callback
+		if ( isset( $args[1] ) && is_callable( $args[1] ) ) {
+			$callback = $args[1];
+		} elseif ( isset( $args[1] ) ) {
+			wcpdf_log_error( sprintf( 
+				'Non-callable callback provided for filter "%s": %s', 
+				$hook_name, 
+				is_string( $args[1] ) ? $args[1] : gettype( $args[1] )
+			), 'critical' );
+			$is_valid = false;
+		} else {
+			wcpdf_log_error( sprintf( 
+				'No callback provided for filter "%s".', 
+				$hook_name
+			), 'critical' );
+			$is_valid = false;
+		}
+	}
+	
+	$priority      = isset( $args[2] ) ? absint( $args[2] ) : 10;
+	$accepted_args = isset( $args[3] ) ? absint( $args[3] ) : 1;
+	
+	return compact( 'hook_name', 'callback', 'priority', 'accepted_args', 'is_valid' );
+}
+
+/**
+ * Get refund IDs for given order IDs or order object.
+ *
+ * @param \WC_Order|int|int[] $order_or_ids Order object or order ID(s).
+ * @return int[] Unique array of refund IDs.
+ */
+function wpo_ips_get_refund_ids( $order_or_ids ) {
+	$refund_ids = array();
+
+	// Normalize input to an array of IDs.
+	if ( $order_or_ids instanceof WC_Order ) {
+		$order_ids = array( $order_or_ids->get_id() );
+	} elseif ( is_array( $order_or_ids ) ) {
+		$order_ids = array_map( 'absint', $order_or_ids );
+	} else {
+		$order_ids = array( absint( $order_or_ids ) );
+	}
+
+	foreach ( $order_ids as $order_id ) {
+		$order = wc_get_order( $order_id );
+
+		if ( ! $order ) {
+			continue;
+		}
+
+		foreach ( $order->get_refunds() as $refund ) {
+			$refund_ids[] = $refund->get_id();
+		}
+	}
+
+	// Clean output: remove empty, dedupe, reindex
+	return array_values( array_unique( array_filter( $refund_ids ) ) );
+}
+
+/**
+ * Safely format any setting value for report output.
+ *
+ * @param mixed $value
+ * @return string
+ */
+function wpo_ips_format_report_setting_value( $value ): string {
+	// Booleans
+	if ( is_bool( $value ) ) {
+		return $value
+			? '<span class="badge badge-enabled">Enabled</span>'
+			: '<span class="badge badge-disabled">Disabled</span>';
+	}
+
+	// Null / empty
+	if ( is_null( $value ) || $value === '' ) {
+		return '<em>None</em>';
+	}
+
+	// Strings
+	if ( is_string( $value ) ) {
+		$normalized = strtolower( trim( $value ) );
+
+		if ( in_array( $normalized, array( 'enabled', 'yes', 'true', 'on' ), true ) ) {
+			return '<span class="badge badge-enabled">Enabled</span>';
+		}
+
+		if ( in_array( $normalized, array( 'disabled', 'no', 'false', 'off' ), true ) ) {
+			return '<span class="badge badge-disabled">Disabled</span>';
+		}
+
+		if ( in_array( $normalized, array( 'restricted', 'limited', 'partial', 'deprecated', 'experimental', 'warning' ), true ) ) {
+			return '<span class="badge badge-warning">' . esc_html( ucfirst( $value ) ) . '</span>';
+		}
+
+		return esc_html( $value );
+	}
+
+	// Arrays
+	if ( is_array( $value ) ) {
+
+		// Directory permissions array (value, status, status_message)
+		if ( isset( $value['value'], $value['status'], $value['status_message'] ) ) {
+			$html  = '<div class="config-item">';
+			$html .= '<div class="config-value"><strong>Value:</strong> ' . esc_html( $value['value'] ) . '</div>';
+
+			$html .= '<div class="config-status"><strong>Status:</strong> ';
+			if ( 'ok' === $value['status'] ) {
+				$html .= '<span class="badge badge-enabled">' . esc_html( $value['status_message'] ) . '</span>';
+			} else {
+				$html .= '<span class="badge badge-disabled">' . esc_html( $value['status_message'] ) . '</span>';
+			}
+			$html .= '</div>';
+
+			if ( ! empty( $value['description'] ) ) {
+				$html .= '<div class="config-description"><em>' . esc_html( $value['description'] ) . '</em></div>';
+			}
+
+			$html .= '</div>';
+
+			return $html;
+		}
+
+		// Server config array (required/value/result[/fallback])
+		if ( isset( $value['required'] ) || isset( $value['value'] ) || isset( $value['result'] ) ) {
+			$html = '<div class="config-item">';
+
+			if ( ! empty( $value['required'] ) ) {
+				$html .= '<div class="config-required"><strong>Required:</strong> ' . $value['required'] . '</div>';
+			}
+
+			if ( isset( $value['value'] ) && '' !== $value['value'] ) {
+				$html .= '<div class="config-value"><strong>Value:</strong> ' . wpo_ips_format_report_setting_value( $value['value'] ) . '</div>';
+			}
+
+			if ( array_key_exists( 'result', $value ) ) {
+				$result = (bool) $value['result'];
+
+				$html .= '<div class="config-result"><strong>Result:</strong> ';
+				if ( $result ) {
+					$html .= '<span class="badge badge-enabled">OK</span>';
+				} else {
+					$html .= '<span class="badge badge-warning">Not OK</span>';
+				}
+				$html .= '</div>';
+			}
+
+			if ( ! empty( $value['fallback'] ) && empty( $value['result'] ) ) {
+				$html .= '<div class="config-fallback"><em>' . $value['fallback'] . '</em></div>';
+			}
+
+			$html .= '</div>';
+
+			return $html;
+		}
+
+		// Generic fallback for multidimensional arrays
+		$items = array();
+		foreach ( $value as $key => $val ) {
+			$items[] = esc_html( (string) $key ) . ': ' . wpo_ips_format_report_setting_value( $val );
+		}
+
+		return '<ul style="margin:0; padding-left:15px;"><li>' . implode( '</li><li>', $items ) . '</li></ul>';
+	}
+
+	// Objects
+	if ( is_object( $value ) ) {
+		return '<pre style="margin:0;">' . esc_html( print_r( $value, true ) ) . '</pre>';
+	}
+
+	// Numbers and everything else
+	return esc_html( (string) $value );
+}
+
+/**
+ * Build plugin data array from a list of plugin file paths.
+ *
+ * @param array $plugin_files Array of plugin file paths (e.g., 'plugin-folder/plugin-file.php').
+ * @return array
+ */
+function wpo_ips_get_plugins_data( array $plugin_files ): array {
+	$plugins           = array();
+	$installed_plugins = get_plugins();
+
+	foreach ( $plugin_files as $plugin_file ) {
+		// Check if the plugin is installed.
+		if ( ! isset( $installed_plugins[ $plugin_file ] ) ) {
+			continue;
+		}
+
+		$plugin_data = get_plugin_data( WP_PLUGIN_DIR . '/' . $plugin_file );
+
+		if ( ! empty( $plugin_data ) ) {
+			$plugins[ $plugin_file ] = array(
+				'name'      => $plugin_data['Name'],
+				'version'   => $plugin_data['Version'],
+				'is_active' => is_plugin_active( $plugin_file ),
+			);
+		}
+	}
+
+	return $plugins;
+}
+
+/**
+ * Check whether a VAT plugin is active.
+ *
+ * @return bool
+ */
+function wpo_ips_has_vat_plugin_active(): bool {
+	$detectors = apply_filters(
+		'wpo_ips_vat_plugin_detectors',
+		array(
+			'woocommerce_eu_vat_compliance' => static function () {
+				return class_exists( 'WC_EU_VAT_Compliance' );
+			},
+
+			'eu_vat_for_woocommerce' => static function () {
+				return defined( 'ALG_WC_EU_VAT_FILE' )
+					|| class_exists( 'Alg_WC_EU_VAT' );
+			},
+
+			'aelia_eu_vat_assistant' => static function () {
+				return class_exists( 'Aelia_WC_EU_VAT_Assistant_RequirementsChecks' )
+					|| class_exists( 'WC_Aelia_EU_VAT_Assistant' )
+					|| isset( $GLOBALS['wc-aelia-eu-vat-assistant'] );
+			},
+
+			'eu_vat_guard_for_woocommerce' => static function () {
+				return defined( 'EU_VAT_GUARD_PLUGIN_FILE' )
+					|| class_exists( 'Stormlabs\\EUVATGuard\\VAT_Guard' )
+					|| class_exists( 'EU_VAT_Guard' );
+			},
+		)
+	);
+
+	if ( ! is_array( $detectors ) ) {
+		return false;
+	}
+
+	foreach ( $detectors as $detector ) {
+		if ( ! is_callable( $detector ) ) {
+			continue;
+		}
+
+		$result = $detector();
+
+		// Allow bool true, non-empty string, non-empty array, etc.
+		if ( ! empty( $result ) ) {
+			return true;
+		}
+	}
+
+	return false;
 }

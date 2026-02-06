@@ -6,7 +6,7 @@ use WPO\IPS\Settings\SettingsCallbacks;
 use WPO\IPS\Settings\SettingsGeneral;
 use WPO\IPS\Settings\SettingsDocuments;
 use WPO\IPS\Settings\SettingsDebug;
-use WPO\IPS\Settings\SettingsUbl;
+use WPO\IPS\Settings\SettingsEDI;
 use WPO\IPS\Settings\SettingsUpgrade;
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -17,24 +17,25 @@ if ( ! class_exists( '\\WPO\\IPS\\Settings' ) ) :
 
 class Settings {
 
+	/** @var string|false */
 	public $options_page_hook;
-	public $callbacks;
-	public $general;
-	public $documents;
-	public $debug;
-	public $upgrade;
-	public $ubl;
-	public $general_settings;
-	public $debug_settings;
-	public $ubl_tax_settings;
+	public SettingsCallbacks $callbacks;
+	public SettingsGeneral $general;
+	public SettingsDocuments $documents;
+	public SettingsDebug $debug;
+	public SettingsUpgrade $upgrade;
+	public SettingsEDI $edi;
+	public array $general_settings;
+	public array $debug_settings;
+	public array $edi_settings;
 
-	private $installed_templates       = array();
-	private $installed_templates_cache = array();
-	private $template_list_cache       = array();
+	private array $installed_templates       = array();
+	private array $installed_templates_cache = array();
+	private array $template_list_cache       = array();
 
-	protected static $_instance = null;
+	protected static ?self $_instance = null;
 
-	public static function instance() {
+	public static function instance(): self {
 		if ( is_null( self::$_instance ) ) {
 			self::$_instance = new self();
 		}
@@ -42,16 +43,14 @@ class Settings {
 	}
 
 	public function __construct() {
-		$this->callbacks        = SettingsCallbacks::instance();
-		$this->general          = SettingsGeneral::instance();
-		$this->documents        = SettingsDocuments::instance();
-		$this->debug            = SettingsDebug::instance();
-		$this->ubl              = SettingsUbl::instance();
-		$this->upgrade          = SettingsUpgrade::instance();
+		$this->callbacks = SettingsCallbacks::instance();
+		$this->general   = SettingsGeneral::instance();
+		$this->documents = SettingsDocuments::instance();
+		$this->debug     = SettingsDebug::instance();
+		$this->edi       = SettingsEDI::instance();
+		$this->upgrade   = SettingsUpgrade::instance();
 
-		$this->general_settings = get_option( 'wpo_wcpdf_settings_general' );
-		$this->debug_settings   = get_option( 'wpo_wcpdf_settings_debug' );
-		$this->ubl_tax_settings = get_option( 'wpo_wcpdf_settings_ubl_taxes' );
+		$this->load_settings();
 
 		// Settings menu item
 		add_action( 'admin_menu', array( $this, 'menu' ), 999 ); // Add menu
@@ -89,6 +88,9 @@ class Settings {
 
 		// Apply categories to general settings.
 		add_filter( 'wpo_wcpdf_settings_fields_general', array( $this, 'update_general_settings_categories' ), 999, 5 );
+
+		// Apply categories to debug (Advanced) settings.
+		add_filter( 'wpo_wcpdf_settings_fields_debug', array( $this, 'update_debug_settings_categories' ), 999, 4 );
 
 		// Sync address from WooCommerce address.
 		add_action( 'wp_ajax_wpo_wcpdf_sync_address', array( $this, 'sync_shop_address_with_woo' ) );
@@ -174,7 +176,7 @@ class Settings {
 		settings_errors();
 
 		$settings_tabs = apply_filters( 'wpo_wcpdf_settings_tabs', array(
-			'general' => array(
+			'general'   => array(
 				'title'          => __( 'General', 'woocommerce-pdf-invoices-packing-slips' ),
 				'preview_states' => 3,
 			),
@@ -182,13 +184,11 @@ class Settings {
 				'title'          => __( 'Documents', 'woocommerce-pdf-invoices-packing-slips' ),
 				'preview_states' => 3,
 			),
+			'edi'       => array(
+				'title'          => __( 'E-Documents', 'woocommerce-pdf-invoices-packing-slips' ),
+				'preview_states' => 1,
+			),
 		) );
-
-		$settings_tabs['ubl'] = array(
-			'title'          => __( 'Taxes', 'woocommerce-pdf-invoices-packing-slips' ),
-			'preview_states' => 1,
-			//'beta'           => true,
-		);
 
 		// add status and upgrade tabs last in row
 		$settings_tabs['debug'] = array(
@@ -209,10 +209,9 @@ class Settings {
 	}
 
 	public function maybe_disable_preview_on_settings_tabs( $settings_tabs ) {
-		$debug_settings = get_option( 'wpo_wcpdf_settings_debug', array() );
-		$close_preview  = isset( $debug_settings['disable_preview'] );
-
-		if ( $close_preview ) {
+		$this->load_settings();
+		
+		if ( isset( $this->debug_settings['disable_preview'] ) ) {
 			foreach ( $settings_tabs as $tab_key => &$tab ) {
 				if ( is_array( $tab ) && ! empty( $tab['preview_states'] ) ) {
 					$tab['preview_states'] = 1;
@@ -243,7 +242,7 @@ class Settings {
 			if ( ! empty( $_POST['order_id'] ) ) {
 				$order_id = sanitize_text_field( wp_unslash( $_POST['order_id'] ) );
 
-				if ( $document_type == 'credit-note' ) {
+				if ( 'credit-note' === $document_type ) {
 					// get last refund ID of the order if available
 					$refund = wc_get_orders(
 						array(
@@ -296,8 +295,7 @@ class Settings {
 					}
 
 					// reload settings
-					$this->general_settings = get_option( 'wpo_wcpdf_settings_general' );
-					$this->debug_settings   = get_option( 'wpo_wcpdf_settings_debug' );
+					$this->load_settings();
 
 					do_action( 'wpo_wcpdf_preview_after_reload_settings' );
 				}
@@ -342,8 +340,8 @@ class Settings {
 						case 'pdf':
 							$preview_data = base64_encode( $document->preview_pdf() );
 							break;
-						case 'ubl':
-							$preview_data = $document->preview_ubl();
+						case 'xml':
+							$preview_data = $document->preview_xml();
 							break;
 					}
 
@@ -355,9 +353,11 @@ class Settings {
 					wp_send_json_error(
 						array(
 							'error' => sprintf(
-								/* translators: order ID */
-								esc_html__( 'Document not available for order #%s, try selecting a different order.', 'woocommerce-pdf-invoices-packing-slips' ),
-								$order_id
+								/* translators: 1. order ID, 2. documentation page link, 3. documentation page link closing tag */
+								esc_html__( 'The PDF preview for order #%1$d is not available. This can happen if some settings prevent the document from being generated. Please review your configuration or check the %2$sdocumentation%3$s for more details.', 'woocommerce-pdf-invoices-packing-slips' ),
+								$order_id,
+								'<a href="https://docs.wpovernight.com/woocommerce-pdf-invoices-packing-slips/troubleshooting-pdf-preview-unavailability/" target="_blank">',
+								'</a>'
 							)
 						)
 					);
@@ -548,7 +548,9 @@ class Settings {
 
 	public function get_document_settings( $document_type, $output_format = 'pdf' ) {
 		if ( ! empty( $document_type ) ) {
-			$option_name = ( 'pdf' === $output_format ) ? "wpo_wcpdf_documents_settings_{$document_type}" : "wpo_wcpdf_documents_settings_{$document_type}_{$output_format}";
+			$option_name = ( 'pdf' === $output_format || 'xml' === $output_format ) // In 5.0.0 and later, E‑Documents settings are isolated from document settings, so PDF is the default.
+				? "wpo_wcpdf_documents_settings_{$document_type}"
+				: "wpo_wcpdf_documents_settings_{$document_type}_{$output_format}";
 			return get_option( $option_name, array() );
 		} else {
 			return false;
@@ -561,10 +563,7 @@ class Settings {
 		if ( isset( $this->debug_settings['html_output'] ) || ( isset( $request['output'] ) && 'html' === $request['output'] ) ) {
 			$output_format = 'html';
 		} elseif ( isset( $request['output'] ) && ! empty( $request['output'] ) && ! empty( $document ) && in_array( $request['output'], $document->output_formats ) ) {
-			$document_settings = $this->get_document_settings( $document->get_type(), esc_attr( $request['output'] ) );
-			if ( isset( $document_settings['enabled'] ) ) {
-				$output_format = esc_attr( $request['output'] );
-			}
+			$output_format = esc_attr( $request['output'] );
 		}
 
 		return apply_filters( 'wpo_wcpdf_output_format', $output_format, $document );
@@ -586,15 +585,58 @@ class Settings {
 		}
 		return $output_mode;
 	}
+	
+	/**
+	 * Get installed templates list as options.
+	 *
+	 * @return array
+	 */
+	public function get_installed_templates_list(): array {
+		$installed_templates = $this->get_installed_templates();
+		$template_list       = array();
+		
+		foreach ( $installed_templates as $path => $template_id ) {
+			$template_name = basename( $template_id );
+			$group         = dirname( $template_id );
 
-	public function get_template_path() {
+			// check if this is an extension template
+			if ( false !== strpos( $group, 'extension::' ) ) {
+				$extension = explode( '::', $group );
+				$group     = 'extension';
+			}
+
+			switch ( $group ) {
+				case 'default':
+				case 'premium_plugin':
+					// no suffix
+					break;
+				case 'extension':
+					$template_name = sprintf( '%s (%s) [%s]', $template_name, __( 'Extension', 'woocommerce-pdf-invoices-packing-slips' ), $extension[1] );
+					break;
+				case 'theme':
+				default:
+					$template_name = sprintf( '%s (%s)', $template_name, __( 'Custom', 'woocommerce-pdf-invoices-packing-slips' ) );
+					break;
+			}
+			
+			$template_list[ $template_id ] = $template_name;
+		}
+		
+		return $template_list;
+	}
+
+	public function get_template_path( string $template_path = '' ) {
+		$selected_template = $template_path
+			? sanitize_text_field( $template_path )
+			: ( $this->general_settings['template_path'] ?? '' );
+		
 		// return default path if no template selected
-		if ( empty( $this->general_settings['template_path'] ) ) {
+		if ( empty( $selected_template ) ) {
 			return wp_normalize_path( WPO_WCPDF()->plugin_path() . '/templates/Simple' );
 		}
 
 		$installed_templates = $this->get_installed_templates();
-		$selected_template = $this->general_settings['template_path'];
+		
 		if ( in_array( $selected_template, $installed_templates ) ) {
 			return array_search( $selected_template, $installed_templates );
 		} else {
@@ -1137,6 +1179,28 @@ class Settings {
 	}
 
 	/**
+	 * Apply categories to debug settings.
+	 *
+	 * @param array  $settings_fields
+	 * @param string $page
+	 * @param string $option_group
+	 * @param string $option_name
+	 *
+	 * @return array
+	 */
+	public function update_debug_settings_categories( array $settings_fields, string $page, string $option_group, string $option_name ): array {
+		$settings_categories = is_callable( array( $this->debug, 'get_settings_categories' ) )
+			? $this->debug->get_settings_categories()
+			: array();
+
+		if ( empty( $settings_categories ) ) {
+			return $settings_fields;
+		}
+
+		return $this->apply_setting_categories( $settings_fields, $settings_categories );
+	}
+
+	/**
 	 * Apply categories to settings fields.
 	 *
 	 * @param array $settings_fields
@@ -1210,6 +1274,21 @@ class Settings {
 		}
 
 		return $modified_settings_fields;
+	}
+	
+	/**
+	 * Initializes settings by loading them from the database.
+	 *
+	 * @return void
+	 */
+	private function load_settings(): void {
+		$general_settings = get_option( 'wpo_wcpdf_settings_general', array() );
+		$debug_settings   = get_option( 'wpo_wcpdf_settings_debug', array() );
+		$edi_settings     = get_option( 'wpo_ips_edi_settings', array() );
+
+		$this->general_settings = is_array( $general_settings ) ? $general_settings : array();
+		$this->debug_settings   = is_array( $debug_settings )   ? $debug_settings   : array();
+		$this->edi_settings     = is_array( $edi_settings )     ? $edi_settings     : array();
 	}
 
 	/**

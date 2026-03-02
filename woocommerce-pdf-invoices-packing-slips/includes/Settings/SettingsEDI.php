@@ -42,7 +42,7 @@ class SettingsEDI {
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'save_taxes_on_calculate_order_totals' ), 10, 2 );
 		add_action( 'woocommerce_checkout_order_processed', array( $this, 'save_taxes_on_checkout' ), 10, 3 );
 		add_filter( 'pre_update_option_wpo_ips_edi_settings', array( $this, 'preserve_peppol_settings' ), 10, 3 );
-		
+
 		// AJAX
 		add_action( 'wp_ajax_wpo_ips_edi_save_taxes', array( $this, 'ajax_save_taxes' ) );
 		add_action( 'wp_ajax_wpo_ips_edi_reload_tax_table', array( $this, 'ajax_reload_tax_table' ) );
@@ -368,8 +368,9 @@ class SettingsEDI {
 				'title'             => __( 'Customer Peppol Identifier Fields Location', 'woocommerce-pdf-invoices-packing-slips' ),
 				'option_name'       => $option_name,
 				'id'                => 'peppol_customer_identifier_fields_location',
-				'default'           => 'both',
+				'default'           => 'none',
 				'options'           => array(
+					'none '      => __( 'None', 'woocommerce-pdf-invoices-packing-slips' ),
 					'checkout'   => __( 'Checkout only', 'woocommerce-pdf-invoices-packing-slips' ),
 					'my_account' => __( 'My Account only', 'woocommerce-pdf-invoices-packing-slips' ),
 					'both'       => __( 'Both Checkout and My Account', 'woocommerce-pdf-invoices-packing-slips' ),
@@ -382,9 +383,9 @@ class SettingsEDI {
 				),
 			),
 		);
-		
+
 		// Peppol specific field
-		if ( ! wpo_wcpdf_checkout_is_block() || ( defined( 'WC_VERSION' ) && version_compare( WC_VERSION, '9.9.0', '>=' ) ) ) {
+		if ( defined( 'WC_VERSION' ) && version_compare( WC_VERSION, '9.9.0', '>=' ) ) {
 			$settings_fields[] = array(
 				'type'     => 'setting',
 				'id'       => 'peppol_endpoint_id_checkout_visibility',
@@ -410,7 +411,7 @@ class SettingsEDI {
 				),
 			);
 		}
-		
+
 		// Peppol specific field
 		$settings_fields[] = array(
 			'type'     => 'setting',
@@ -433,7 +434,70 @@ class SettingsEDI {
 				),
 			),
 		);
-		
+
+		// Peppol specific field
+		$settings_fields[] = array(
+			'type'     => 'setting',
+			'id'       => 'peppol_automatic_endpoint_id_derivation',
+			'title'    => '',
+			'callback' => 'checkbox',
+			'section'  => $section,
+			'args'     => array(
+				'title'             => __( 'Automatic Endpoint ID Derivation', 'woocommerce-pdf-invoices-packing-slips' ),
+				'option_name'       => $option_name,
+				'id'                => 'peppol_automatic_endpoint_id_derivation',
+				'description'       => sprintf(
+					/* translators: %s: link to documentation */
+					__( 'Automatically generate Peppol IDs from VAT numbers for supported countries. This can help ensure the correct format and reduce errors. %s', 'woocommerce-pdf-invoices-packing-slips' ),
+					'<a href="https://docs.wpovernight.com/e-documents/automatic-peppol-endpoint-id-derivation-from-vat-number/" rel="noopener noreferrer" target="_blank">' . __( 'Learn more', 'woocommerce-pdf-invoices-packing-slips' ) . '</a>'
+				),
+				'custom_attributes' => array(
+					'data-show_for_option_name'   => $option_name . '[ubl_format]',
+					'data-show_for_option_values' => wp_json_encode( array( 'peppol-bis-3p0' ) ),
+					'data-keep_current_value'     => true,
+				),
+			),
+		);
+
+		$mappings  = wpo_ips_edi_get_peppol_vat_mappings();
+		$countries = array();
+
+		if ( is_array( $mappings ) ) {
+			foreach ( $mappings as $code => $data ) {
+				if ( empty( $data['name'] ) || empty( $data['eas'] ) ) {
+					continue;
+				}
+
+				$countries[ $code ] = sprintf( '%s [%s]', $data['name'], $data['eas'] );
+			}
+		}
+
+		asort( $countries, SORT_NATURAL | SORT_FLAG_CASE );
+
+		// Peppol specific field
+		$settings_fields[] = array(
+			'type'     => 'setting',
+			'id'       => 'peppol_automatic_endpoint_id_derivation_countries',
+			'title'    => '',
+			'callback' => 'select',
+			'section'  => $section,
+			'args'     => array(
+				'title'             => __( ' Select Countries to Automate Endpoint ID', 'wpo-ips-edocs-network' ),
+				'option_name'       => $option_name,
+				'id'                => 'peppol_automatic_endpoint_id_derivation_countries',
+				'options'           => $countries,
+				'multiple'          => true,
+				'enhanced_select'   => true,
+				'placeholder'       => __( 'Select one or more countries', 'wpo-ips-edocs-network' ),
+				'class'             => 'edi-multiple',
+				'custom_attributes' => array(
+					'data-show_for_option_name'   => $option_name . '[ubl_format]',
+					'data-show_for_option_values' => wp_json_encode( array( 'peppol-bis-3p0' ) ),
+					'data-keep_current_value'     => true,
+				),
+			),
+		);
+
 		$languages = wpo_wcpdf_get_multilingual_languages();
 
 		if ( count( $languages ) > 0 ) {
@@ -456,7 +520,7 @@ class SettingsEDI {
 				)
 			);
 		}
-		
+
 		$settings_fields[] = array(
 			'type'     => 'setting',
 			'id'       => 'embed_encrypted_pdf',
@@ -474,7 +538,7 @@ class SettingsEDI {
 				),
 			)
 		);
-		
+
 		$settings_fields[] = array(
 			'type'     => 'setting',
 			'id'       => 'send_attachments',
@@ -487,7 +551,7 @@ class SettingsEDI {
 				'description' => __( 'When sending a document by e-mail, automatically include the electronic version attachment along with the PDF.', 'woocommerce-pdf-invoices-packing-slips' ),
 			),
 		);
-		
+
 		$settings_fields[] = array(
 			'type'     => 'setting',
 			'id'       => 'include_item_meta',
@@ -539,7 +603,7 @@ class SettingsEDI {
 		$settings_fields = apply_filters( 'wpo_ips_edi_settings', $settings_fields, $page, $option_group, $option_name );
 		WPO_WCPDF()->settings->add_settings_fields( $settings_fields, $page, $option_group, $option_name );
 	}
-	
+
 	/**
 	 * Preserve Peppol settings on update.
 	 *
@@ -552,7 +616,7 @@ class SettingsEDI {
 	public function preserve_peppol_settings( $value, $old_value, string $option ): array {
 		$new = is_array( $value )     ? $value     : array();
 		$old = is_array( $old_value ) ? $old_value : array();
-		
+
 		foreach ( $new as $key => $val ) {
 			if ( false !== strpos( $key, 'peppol_' ) ) {
 				// preserve old value on empty new value
@@ -564,7 +628,7 @@ class SettingsEDI {
 				}
 			}
 		}
-		
+
 		return $new;
 	}
 
@@ -745,7 +809,7 @@ class SettingsEDI {
 			<?php
 		endforeach;
 	}
-	
+
 	/**
 	 * Output customer identifiers.
 	 *
@@ -775,7 +839,7 @@ class SettingsEDI {
 		</div>
 		<?php
 	}
-	
+
 	/**
 	 * Save the tax settings
 	 *
@@ -1092,7 +1156,7 @@ class SettingsEDI {
 		<?php
 		echo apply_filters( 'wpo_ips_edi_settings_output_network_html', ob_get_clean(), $this ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
-	
+
 	/**
 	 * Output a tax selector for a specific context.
 	 *
@@ -1117,7 +1181,7 @@ class SettingsEDI {
 				'selected'     => true,
 			)
 		);
-		
+
 		$defaults = array(
 			'default' => __( 'Default', 'woocommerce-pdf-invoices-packing-slips' ),
 		);
@@ -1156,7 +1220,7 @@ class SettingsEDI {
 
 		echo wp_kses( $select, $allowed_html );
 	}
-	
+
 	/**
 	 * Get tax rate locations grouped by tax_rate_id for a given set of tax rate rows.
 	 *

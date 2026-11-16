@@ -15,8 +15,10 @@ class SettingsCallbacks {
 
 	/**
 	 * Instance of this class.
+	 * 
+	 * @return self
 	 */
-	public static function instance(): ?self {
+	public static function instance(): self {
 		if ( is_null( self::$_instance ) ) {
 			self::$_instance = new self();
 		}
@@ -91,7 +93,7 @@ class SettingsCallbacks {
 			esc_attr( $value ),
 			checked( $value, $current, false ), 
 			! empty( $disabled ) ? 'disabled="disabled"' : '',
-			wp_kses_post( $custom_attributes )
+			$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 		);
 		
 		if ( ! empty( $title ) ) {
@@ -165,7 +167,7 @@ class SettingsCallbacks {
 			esc_attr( $size ),
 			esc_attr( $placeholder ),
 			! empty( $disabled ) ? 'disabled="disabled"' : '',
-			wp_kses_post( $custom_attributes )
+			$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 		);
 
 		// Output action button.
@@ -216,7 +218,7 @@ class SettingsCallbacks {
 			esc_attr( $size ),
 			esc_attr( $placeholder ),
 			! empty( $disabled ) ? 'disabled="disabled"' : '',
-			wp_kses_post( $custom_attributes )
+			$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 		);
 
 		// output description.
@@ -261,7 +263,7 @@ class SettingsCallbacks {
 			esc_attr( $size ),
 			esc_attr( $placeholder ),
 			! empty( $disabled ) ? 'disabled="disabled"' : '',
-			wp_kses_post( $custom_attributes )
+			$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 		);
 
 		// output description.
@@ -372,7 +374,7 @@ class SettingsCallbacks {
 			esc_attr( $current ),
 			esc_attr( $size ),
 			esc_attr( $class ),
-			wp_kses_post( $custom_attributes )
+			$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 		);
 
 		// output description.
@@ -411,7 +413,7 @@ class SettingsCallbacks {
 			esc_attr( $width ),
 			esc_attr( $height ),
 			esc_attr( $placeholder ),
-			wp_kses_post( $custom_attributes )
+			$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 		);
 
 		// output description.
@@ -430,6 +432,7 @@ class SettingsCallbacks {
 	 *   title             - secondary title of the input (optional)
 	 *   setting_name      - name of the main setting
 	 *   id                - key of the setting
+	 *   show_empty_option - keep the empty option selectable in enhanced selects (optional)
 	 *   multiple          - whether the select is multiple (optional)
 	 *   options           - array of options for the select
 	 *   current           - current value(s) of the setting
@@ -462,22 +465,25 @@ class SettingsCallbacks {
 				$multiple = '';
 			}
 
-			$placeholder = ! empty( $placeholder ) ? esc_attr( $placeholder ) : '';
+			// Select2 placeholders hide the empty option; keep it selectable when requested.
+			$placeholder_attribute = ! empty( $show_empty_option )
+				? ''
+				: 'data-placeholder="' . esc_attr( $placeholder ?? '' ) . '"';
 			$title       = ! empty( $title ) ? esc_attr( $title ) : '';
 			$class       = 'wc-enhanced-select wpo-wcpdf-enhanced-select';
 			$css         = 'width:400px';
 			
 			printf(
-				'<select id="%1$s" name="%2$s" data-placeholder="%3$s" title="%4$s" class="%5$s" style="%6$s" %7$s %8$s %9$s>',
+				'<select id="%1$s" name="%2$s" %3$s title="%4$s" class="%5$s" style="%6$s" %7$s %8$s %9$s>',
 				esc_attr( $id ),
 				esc_attr( $setting_name ),
-				esc_attr( $placeholder ),
+				$placeholder_attribute, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped above.
 				esc_attr( $title ),
 				esc_attr( $class ),
 				esc_attr( $css ),
 				esc_attr( $multiple ),
 				! empty( $disabled ) ? 'disabled="disabled"' : '',
-				wp_kses_post( $custom_attributes )
+				$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 			);
 		} else {
 			printf(
@@ -485,7 +491,7 @@ class SettingsCallbacks {
 				esc_attr( $id ),
 				esc_attr( $setting_name ),
 				! empty( $disabled ) ? 'disabled="disabled"' : '',
-				wp_kses_post( $custom_attributes )
+				$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 			);
 		}
 
@@ -595,7 +601,7 @@ class SettingsCallbacks {
 				esc_attr( $setting_name ),
 				esc_attr( $key ),
 				checked( $current, $key, false ),
-				wp_kses_post( $custom_attributes )
+				$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 			);
 			
 			printf(
@@ -678,7 +684,7 @@ class SettingsCallbacks {
 				esc_attr( $field_current ),
 				esc_attr( $size ),
 				esc_attr( $placeholder ),
-				wp_kses_post( $custom_attributes )
+				$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 			);
 
 			// field description.
@@ -734,7 +740,7 @@ class SettingsCallbacks {
 				esc_attr( $name ),
 				esc_attr( $value ),
 				checked( $value, $field_current, false ),
-				wp_kses_post( $custom_attributes )
+				$custom_attributes // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in normalize_custom_attributes()
 			);
 
 			// output field label
@@ -897,7 +903,7 @@ class SettingsCallbacks {
 			$store               = $store->store_name;
 		// legacy
 		} else {
-			$number_store_method = WPO_WCPDF()->settings->get_sequential_number_store_method();
+			$number_store_method = WPO_WCPDF()->get_instance( 'settings' )->get_sequential_number_store_method();
 			$number_store        = new SequentialNumberStore( $store, $number_store_method );
 			$next_number         = $number_store->get_next();
 		}
@@ -1152,7 +1158,11 @@ class SettingsCallbacks {
 		}
 
 		// Return the array processing any additional functions filtered by this action.
-		return apply_filters( 'wpo_wcpdf_validate_input', $output, $input );
+		return (array) apply_filters(
+			'wpo_wcpdf_validate_input',
+			$output,
+			$input
+		);
 	}
 
 	/**

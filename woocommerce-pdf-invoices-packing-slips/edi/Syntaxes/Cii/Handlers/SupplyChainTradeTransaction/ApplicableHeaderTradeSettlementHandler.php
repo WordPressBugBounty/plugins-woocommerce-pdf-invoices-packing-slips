@@ -40,7 +40,7 @@ class ApplicableHeaderTradeSettlementHandler extends AbstractCiiHandler {
 	 * @return array|null
 	 */
 	public function get_payment_reference(): ?array {
-		$order     = $this->document->order;
+		$order     = \wpo_ips_edi_get_parent_order( $this->document->order );
 		$reference = $order->get_order_number(); // Default to WooCommerce order number
 		$reference = apply_filters( 'wpo_ips_edi_cii_payment_reference', $reference, $order, $this );
 
@@ -60,7 +60,15 @@ class ApplicableHeaderTradeSettlementHandler extends AbstractCiiHandler {
 			'value' => wpo_ips_edi_sanitize_string( $reference ),
 		);
 
-		return apply_filters( 'wpo_ips_edi_cii_payment_reference', $payment_reference, $this );
+		$payment_reference = apply_filters(
+			'wpo_ips_edi_cii_payment_reference',
+			$payment_reference,
+			$this
+		);
+
+		return is_array( $payment_reference )
+			? $payment_reference
+			: null;
 	}
 
 	/**
@@ -132,7 +140,15 @@ class ApplicableHeaderTradeSettlementHandler extends AbstractCiiHandler {
 			);
 		}
 
-		return apply_filters( 'wpo_ips_edi_cii_payment_means', $payment_means, $this );
+		$payment_means = apply_filters(
+			'wpo_ips_edi_cii_payment_means',
+			$payment_means,
+			$this
+		);
+
+		return is_array( $payment_means )
+			? $payment_means
+			: null;
 	}
 
 	/**
@@ -160,6 +176,12 @@ class ApplicableHeaderTradeSettlementHandler extends AbstractCiiHandler {
 				continue;
 			}
 
+			// Only emit exemption data for 0% non-Z with an explicit reason.
+			$has_exemption = 0.0 === $percent && 'Z' !== $category && 'NONE' !== $reason;
+			$reason_label  = $has_exemption
+				? ( ! empty( $tax_reasons[ $reason ] ) ? $tax_reasons[ $reason ] : $reason )
+				: '';
+
 			$node_value = array(
 				array(
 					'name'  => 'ram:CalculatedAmount',
@@ -169,35 +191,39 @@ class ApplicableHeaderTradeSettlementHandler extends AbstractCiiHandler {
 					'name'  => 'ram:TypeCode',
 					'value' => $scheme ?: 'VAT',
 				),
-				array(
-					'name'  => 'ram:BasisAmount',
-					'value' => $this->format_decimal( $basis ),
-				),
-				array(
-					'name'  => 'ram:CategoryCode',
-					'value' => $category,
-				),
 			);
+
+			// ExemptionReason must precede BasisAmount in the CII TradeTaxType sequence.
+			if ( $has_exemption ) {
+				$node_value[] = array(
+					'name'  => 'ram:ExemptionReason',
+					'value' => $reason_label,
+				);
+			}
+
+			$node_value[] = array(
+				'name'  => 'ram:BasisAmount',
+				'value' => $this->format_decimal( $basis ),
+			);
+
+			$node_value[] = array(
+				'name'  => 'ram:CategoryCode',
+				'value' => $category,
+			);
+
+			// ExemptionReasonCode must precede RateApplicablePercent.
+			if ( $has_exemption ) {
+				$node_value[] = array(
+					'name'  => 'ram:ExemptionReasonCode',
+					'value' => $reason,
+				);
+			}
 
 			// For category O ("Not subject to VAT"), do not emit RateApplicablePercent.
 			if ( 'O' !== $category ) {
 				$node_value[] = array(
 					'name'  => 'ram:RateApplicablePercent',
 					'value' => $this->format_decimal( $percent, 1 ),
-				);
-			}
-
-			// Only emit exemption data for 0% non-Z with an explicit reason.
-			if ( 0.0 === $percent && 'Z' !== $category && 'NONE' !== $reason ) {
-				$reason_label = ! empty( $tax_reasons[ $reason ] ) ? $tax_reasons[ $reason ] : $reason;
-
-				$node_value[] = array(
-					'name'  => 'ram:ExemptionReasonCode',
-					'value' => $reason,
-				);
-				$node_value[] = array(
-					'name'  => 'ram:ExemptionReason',
-					'value' => $reason_label,
 				);
 			}
 
@@ -211,7 +237,15 @@ class ApplicableHeaderTradeSettlementHandler extends AbstractCiiHandler {
 			return null;
 		}
 
-		return apply_filters( 'wpo_ips_edi_cii_trade_tax', $trade_tax, $this );
+		$trade_tax = apply_filters(
+			'wpo_ips_edi_cii_trade_tax',
+			$trade_tax,
+			$this
+		);
+
+		return is_array( $trade_tax )
+			? $trade_tax
+			: null;
 	}
 
 	/**
@@ -255,7 +289,15 @@ class ApplicableHeaderTradeSettlementHandler extends AbstractCiiHandler {
 			),
 		);
 
-		return apply_filters( 'wpo_ips_edi_cii_payment_terms', $payment_terms, $this );
+		$payment_terms = apply_filters(
+			'wpo_ips_edi_cii_payment_terms',
+			$payment_terms,
+			$this
+		);
+
+		return is_array( $payment_terms )
+			? $payment_terms
+			: null;
 	}
 
 	/**
@@ -317,7 +359,15 @@ class ApplicableHeaderTradeSettlementHandler extends AbstractCiiHandler {
 			'value' => $this->format_decimal( $totals['payable_amount'] ),
 		);
 
-		return apply_filters( 'wpo_ips_edi_cii_monetary_summation', $monetary_summation, $this );
+		$monetary_summation = apply_filters(
+			'wpo_ips_edi_cii_monetary_summation',
+			$monetary_summation,
+			$this
+		);
+
+		return is_array( $monetary_summation )
+			? $monetary_summation
+			: null;
 	}
 
 }

@@ -2,10 +2,10 @@
 Contributors: pomegranate, alexmigf, yordansoares, kluver, dpeyou, dwpriv, mohamadntr
 Donate link: https://wpovernight.com/downloads/woocommerce-pdf-invoices-packing-slips-bundle/
 Tags: woocommerce, pdf, ubl, invoices, packing slips
-Requires at least: 4.4
+Requires at least: 5.9
 Tested up to: 7.1
-Requires PHP: 7.4
-Stable tag: 5.16.6
+Requires PHP: 8.1
+Stable tag: 6.0.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -54,7 +54,7 @@ In addition to a number of default settings (including a custom header/logo) and
 
 = Minimum Requirements =
 
-* WooCommerce 3.3 or later
+* WooCommerce 4.0 or later
 * WordPress 4.4 or later
 
 = Automatic installation =
@@ -109,6 +109,41 @@ There's a setting on the Advanced tab of the settings page that allows you to to
 6. Set shop name, address, header logo, etc.
 
 == Changelog ==
+
+= 6.0.0 (2026-11-16) =
+- New: Modernized, object-oriented codebase with strict types, full type coverage and improved performance
+- New: Require PHP 8.1+, WordPress 5.9+ and WooCommerce 4.0+
+- New: Upgrade CII standard from D16B to D22B, with support for profiles
+- New: Add support for plural document titles
+- New: Add document setting to display the Checkout Field on invoices
+- New: Add log note for failed document creations
+- New: Refactor Peppol endpoint derivation into a reusable method
+- New: Allow overriding WordPress.org language pack translations with custom .po/.mo or .l10n.php files
+- New: Deactivate outdated extension versions automatically, based on each extension's last incompatible release
+- Tweak: Updated promo banner
+- Tweak: Remove bundled .po/.mo translation files in favor of WordPress.org language packs
+- Tweak: Improve registration number identifiers and defaults
+- Tweak: Make PDF maker helpers available to extensions safely
+- Tweak: Keep legacy class aliases for backwards compatibility with pre-v6 extensions
+- Fix: Due date formatting fatal error
+- Fix: Invoice date format in order list
+- Fix: Detection of active extensions for license caching
+- Fix: Document action buttons on the Thank You page
+- Fix: Hidden and duplicate Classic Checkout fields when order notes are disabled
+- Fix: Tighten document permission checks
+- Fix: Harden settings validation and PDF resource loading
+- Fix: Order admin crash with multiple credit notes
+- Fix: Fatal error with malformed document settings
+- Fix: Restore saving bulk packing slip PDFs
+- Fix: Composite Products compatibility
+- Fix: Automatic Peppol derivation when the checkout field is empty
+- Fix: CII line amounts and quantities for negative values
+- Fix: CII tax exemption element order
+- Fix: Missing delivery date in CII invoices
+- Fix: Plugin Check errors
+- Translations: Updated translation template (POT)
+- Tested: Compatibility confirmed with WooCommerce 11.3
+- Tested: Tested up WordPress 7.1
 
 = 5.16.6 (2026-10-22) =
 - Fix: Prevent wrong invoice attachments in customer emails
@@ -1431,6 +1466,7 @@ There's a setting on the Advanced tab of the settings page that allows you to to
 * Translations: Updated translations POT
 
 = 2.1.10 =
+* Upgrade notice: 2.X is a BIG update! Make a full site backup before upgrading if you were using version 1.X!
 * Feature: Include invoice number and date in WooCommerce data remover and exporter
 * Fix: Row class for Chained Products compatibility
 * Fix: Improved compatibility with Advanced Custom Fields
@@ -1591,5 +1627,5 @@ There's a setting on the Advanced tab of the settings page that allows you to to
 
 == Upgrade Notice ==
 
-= 2.1.10 =
-2.X is a BIG update! Make a full site backup before upgrading if you were using version 1.X!
+= 6.0.0 =
+Major update! Update all your PDF Invoices & Packing Slips extensions and add-ons (Professional, Order Proposal, Dokan Invoice, Italian Add-on, Donation Platform, FactuPress and others) to their latest versions BEFORE upgrading. Outdated versions are deactivated automatically after the update.

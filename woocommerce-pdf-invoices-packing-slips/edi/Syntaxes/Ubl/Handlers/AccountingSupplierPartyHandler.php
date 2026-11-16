@@ -56,7 +56,11 @@ class AccountingSupplierPartyHandler extends AbstractUblHandler implements UblPa
 			) ),
 		);
 
-		return apply_filters( 'wpo_ips_edi_ubl_supplier_party', $supplier_party, $this );
+		return (array) apply_filters(
+			'wpo_ips_edi_ubl_supplier_party',
+			$supplier_party,
+			$this
+		);
 	}
 
 	/**
@@ -81,7 +85,15 @@ class AccountingSupplierPartyHandler extends AbstractUblHandler implements UblPa
 			),
 		);
 
-		return apply_filters( 'wpo_ips_edi_ubl_supplier_party_name', $party_name, $this );
+		$party_name = apply_filters(
+			'wpo_ips_edi_ubl_supplier_party_name',
+			$party_name,
+			$this
+		);
+
+		return is_array( $party_name )
+			? $party_name
+			: null;
 	}
 
 	/**
@@ -129,7 +141,15 @@ class AccountingSupplierPartyHandler extends AbstractUblHandler implements UblPa
 			),
 		);
 
-		return apply_filters( 'wpo_ips_edi_ubl_supplier_party_postal_address', $postal_address, $this );
+		$postal_address = apply_filters(
+			'wpo_ips_edi_ubl_supplier_party_postal_address',
+			$postal_address,
+			$this
+		);
+
+		return is_array( $postal_address )
+			? $postal_address
+			: null;
 	}
 
 	/**
@@ -175,7 +195,15 @@ class AccountingSupplierPartyHandler extends AbstractUblHandler implements UblPa
 			'value' => $values,
 		);
 
-		return apply_filters( 'wpo_ips_edi_ubl_supplier_party_tax_scheme', $party_tax_scheme, $this );
+		$party_tax_scheme = apply_filters(
+			'wpo_ips_edi_ubl_supplier_party_tax_scheme',
+			$party_tax_scheme,
+			$this
+		);
+
+		return is_array( $party_tax_scheme )
+			? $party_tax_scheme
+			: null;
 	}
 
 	/**
@@ -184,9 +212,20 @@ class AccountingSupplierPartyHandler extends AbstractUblHandler implements UblPa
 	 * @return array|null
 	 */
 	public function get_party_legal_entity(): ?array {
-		$supplier   = $this->get_supplier_data();
-		$company    = (string) ( $supplier['company'] ?? '' );
-		$coc_number = (string) ( $supplier['coc_number'] ?? '' );
+		$supplier     = $this->get_supplier_data();
+		$company      = (string) ( $supplier['company'] ?? '' );
+		$coc_number   = (string) ( $supplier['coc_number'] ?? '' );
+		$country_code = (string) ( $supplier['country_code'] ?? '' );
+
+		$registration_number_scheme = trim( (string) wpo_ips_edi_get_settings( 'registration_number_scheme' ) );
+
+		if ( empty( $registration_number_scheme ) ) {
+			$registration_number_scheme = (string) wpo_ips_edi_get_identifier_mappings(
+				$country_code,
+				'registration_number',
+				'icd'
+			);
+		}
 
 		if ( empty( $company ) && empty( $coc_number ) ) {
 			wpo_ips_edi_log( 'UBL PartyLegalEntity: Both company name and CoC number are missing for supplier.', 'error' );
@@ -203,10 +242,18 @@ class AccountingSupplierPartyHandler extends AbstractUblHandler implements UblPa
 		}
 
 		if ( ! empty( $coc_number ) ) {
-			$values[] = array(
+			$company_id = array(
 				'name'  => 'cbc:CompanyID',
 				'value' => wpo_ips_edi_sanitize_string( $coc_number ),
 			);
+
+			if ( ! empty( $registration_number_scheme ) ) {
+				$company_id['attributes'] = array(
+					'schemeID' => $registration_number_scheme,
+				);
+			}
+
+			$values[] = $company_id;
 		}
 
 		$party_legal_entity = array(
@@ -214,7 +261,15 @@ class AccountingSupplierPartyHandler extends AbstractUblHandler implements UblPa
 			'value' => $values,
 		);
 
-		return apply_filters( 'wpo_ips_edi_ubl_supplier_party_legal_entity', $party_legal_entity, $this );
+		$party_legal_entity = apply_filters(
+			'wpo_ips_edi_ubl_supplier_party_legal_entity',
+			$party_legal_entity,
+			$this
+		);
+
+		return is_array( $party_legal_entity )
+			? $party_legal_entity
+			: null;
 	}
 
 	/**
@@ -241,7 +296,15 @@ class AccountingSupplierPartyHandler extends AbstractUblHandler implements UblPa
 			),
 		);
 
-		return apply_filters( 'wpo_ips_edi_ubl_supplier_party_contact', $party_contact, $this );
+		$party_contact = apply_filters(
+			'wpo_ips_edi_ubl_supplier_party_contact',
+			$party_contact,
+			$this
+		);
+
+		return is_array( $party_contact )
+			? $party_contact
+			: null;
 	}
 	
 	/**

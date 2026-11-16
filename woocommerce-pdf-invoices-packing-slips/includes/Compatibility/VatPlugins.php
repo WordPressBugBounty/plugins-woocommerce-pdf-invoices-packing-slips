@@ -1,18 +1,18 @@
 <?php
 namespace WPO\IPS\Compatibility;
 
-defined( 'ABSPATH' ) || exit;
+use WPO\IPS\CheckoutField;
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit; // Exit if accessed directly
+}
+
+if ( ! class_exists( '\\WPO\\IPS\\Compatibility\\VatPlugins' ) ) :
 
 class VatPlugins {
 
-	protected static $_instance = null;
-
-	/**
-	 * Cached detection result (per request).
-	 *
-	 * @var array|null
-	 */
-	protected $detected = null;
+	protected ?array $detected        = null;
+	protected static ?self $_instance = null;
 
 	/**
 	 * Singleton instance access.
@@ -178,15 +178,38 @@ class VatPlugins {
 
 	/**
 	 * Get the form selector for the detected VAT plugin, based on context.
-	 * 
+	 *
 	 * @param string $context Context of the form selector, either 'block' or 'classic'.
 	 * @return string
 	 */
 	public function get_form_selector( string $context = 'block' ): string {
 		$info = $this->detect();
+
+		// Only read the checkout input assigned to VAT, never the registration/custom input.
+		if ( empty( $info['active'] ) ) {
+			$checkout_field = \WPO_WCPDF()->get_instance( 'checkout_field' );
+			$field_id       = array_search( CheckoutField::TYPE_VAT_NUMBER, $checkout_field->get_field_types( 'block' === $context ), true );
+
+			if ( false === $field_id || ! $checkout_field->is_enabled( CheckoutField::TYPE_VAT_NUMBER ) ) {
+				return '';
+			}
+
+			if ( in_array( $field_id, array( CheckoutField::ALTERNATIVE_BLOCK_FIELD_ID, CheckoutField::ALTERNATIVE_CLASSIC_FIELD_KEY ), true ) ) {
+				return 'block' === $context
+					? '.wc-block-components-address-form__' . str_replace( '/', '-', $field_id ) . ' input'
+					: '#' . $field_id . '_field input:not(:disabled)';
+			}
+
+			if ( 'classic' === $context ) {
+				return (string) $info['classic_form_selector'] . ':not(:disabled)';
+			}
+		}
+
 		return ( 'block' === $context )
 			? (string) $info['block_form_selector']
 			: (string) $info['classic_form_selector'];
 	}
 	
 }
+
+endif;

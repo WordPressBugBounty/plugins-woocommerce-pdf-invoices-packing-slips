@@ -127,9 +127,80 @@ function wpo_ips_edi_maybe_save_order_customer_peppol_data( \WC_Abstract_Order $
  *
  * @return bool
  * 
- * @deprecated 5.8.0 Use \WPO_WCPDF()->vat_plugins->has_active() instead.
+ * @deprecated 5.8.0 Use \WPO_WCPDF()->get_instance( 'vat_plugins' )->has_active() instead.
  */
 function wpo_ips_has_vat_plugin_active(): bool {
-	_deprecated_function( __FUNCTION__, '5.8.0', '\WPO_WCPDF()->vat_plugins->has_active()' );
-	return \WPO_WCPDF()->vat_plugins->has_active();
+	_deprecated_function( __FUNCTION__, '5.8.0', "\WPO_WCPDF()->get_instance( 'vat_plugins' )->has_active()" );
+	return \WPO_WCPDF()->get_instance( 'vat_plugins' )->has_active();
+}
+
+/**
+ * Get the Invoice object for an order.
+ *
+ * @param mixed $order
+ * @param bool $init
+ * @return object|false
+ *
+ * @deprecated 4.6.3 Use wcpdf_get_document( 'invoice', $order, $init ) instead.
+ */
+function wcpdf_get_invoice( mixed $order, bool $init = false ): object|false {
+	_deprecated_function( __FUNCTION__, '4.6.3', 'wcpdf_get_document( \'invoice\', $order, $init )' );
+	return wcpdf_get_document( 'invoice', $order, $init );
+}
+
+/**
+ * Get the Packing Slip object for an order.
+ *
+ * @param mixed $order
+ * @param bool $init
+ * @return object|false
+ *
+ * @deprecated 4.6.3 Use wcpdf_get_document( 'packing-slip', $order, $init ) instead.
+ */
+function wcpdf_get_packing_slip( mixed $order, bool $init = false ): object|false {
+	_deprecated_function( __FUNCTION__, '4.6.3', 'wcpdf_get_document( \'packing-slip\', $order, $init )' );
+	return wcpdf_get_document( 'packing-slip', $order, $init );
+}
+
+/**
+ * Get the WP_Filesystem instance
+ *
+ * @return mixed
+ * @throws RuntimeException
+ *
+ * @deprecated 4.2.0 Use \WPO\IPS\Compatibility\FileSystem::instance()->wp_filesystem instead.
+ */
+function wpo_wcpdf_get_wp_filesystem(): mixed {
+	_deprecated_function( __FUNCTION__, '4.2.0', '\WPO\IPS\Compatibility\FileSystem::instance()->wp_filesystem' );
+
+	if ( class_exists( '\\WPO\\IPS\\Compatibility\\FileSystem' ) ) {
+		$filesystem = \WPO\IPS\Compatibility\FileSystem::instance();
+		$filesystem->initialize_wp_filesystem();
+		return $filesystem->wp_filesystem ?? false;
+	}
+
+	return false;
+}
+
+/**
+ * Get Peppol VAT number mappings.
+ *
+ * @return array
+ *
+ * @deprecated 6.0.0 Use wpo_ips_edi_get_identifier_mappings() instead.
+ */
+function wpo_ips_edi_get_peppol_vat_mappings(): array {
+	_deprecated_function( __FUNCTION__, '6.0.0', 'wpo_ips_edi_get_identifier_mappings' );
+
+	$identifier_mappings = wpo_ips_edi_get_identifier_mappings();
+	$vat_mappings        = array();
+
+	foreach ( $identifier_mappings as $country_code => $country_data ) {
+		$vat_mappings[ $country_code ] = array(
+			'name'     => $country_data['name'] ?? $country_code,
+			'mappings' => $country_data['mappings']['vat_number'] ?? array(),
+		);
+	}
+
+	return $vat_mappings;
 }

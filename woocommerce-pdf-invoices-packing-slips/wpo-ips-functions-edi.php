@@ -29,7 +29,7 @@ function wpo_ips_edi_sanitize_string( string $string ): string {
  * @return bool
  */
 function wpo_ips_edi_is_zero_tax_category( string $category ): bool {
-	return apply_filters(
+	return (bool) apply_filters(
 		'wpo_ips_edi_is_zero_tax_category',
 		in_array(
 			strtoupper( trim( $category ) ),
@@ -203,7 +203,7 @@ function wpo_ips_edi_get_tax_data_from_fallback( string $key, ?int $rate_id, ?\W
  */
 function wpo_ips_edi_save_order_taxes( \WC_Abstract_Order $order ): void {
 	foreach ( $order->get_taxes() as $item_id => $tax_item ) {
-		if ( is_a( $tax_item, '\WC_Order_Item_Tax' ) && is_callable( array( $tax_item, 'get_rate_id' ) ) ) {
+		if ( $tax_item instanceof \WC_Order_Item_Tax && is_callable( array( $tax_item, 'get_rate_id' ) ) ) {
 			// get tax rate id from item
 			$tax_rate_id = $tax_item->get_rate_id();
 
@@ -238,11 +238,20 @@ function wpo_ips_edi_save_order_taxes( \WC_Abstract_Order $order ): void {
  *
  * @param \WC_Abstract_Order $order
  * @param array              $data
+ * @param bool               $allow_clear Delete stored order meta when an empty peppol_endpoint_id is explicitly sent.
  * @return void
  */
-function wpo_ips_edi_maybe_save_order_peppol_data( \WC_Abstract_Order $order, array $data = array() ): void {
+function wpo_ips_edi_maybe_save_order_peppol_data( \WC_Abstract_Order $order, array $data = array(), bool $allow_clear = false ): void {
 	if ( ! wpo_ips_edi_peppol_is_available() ) {
 		return; // only save for Peppol formats
+	}
+
+	// Explicitly cleared: remove stored order identifier and scheme.
+	if ( $allow_clear && isset( $data['peppol_endpoint_id'] ) && is_string( $data['peppol_endpoint_id'] ) && '' === trim( sanitize_text_field( wp_unslash( $data['peppol_endpoint_id'] ) ) ) ) {
+		$order->delete_meta_data( '_peppol_endpoint_id' );
+		$order->delete_meta_data( '_peppol_endpoint_eas' );
+		$order->save_meta_data();
+		return;
 	}
 
 	$identifier     = '';
@@ -326,7 +335,7 @@ function wpo_ips_edi_get_maker(): ?WPO\IPS\Makers\EDIMaker {
  * @param string|null $key
  * @return array|string|null
  */
-function wpo_ips_edi_get_settings( ?string $key = null ) {
+function wpo_ips_edi_get_settings( ?string $key = null ): array|string|null {
 	$settings = get_option( 'wpo_ips_edi_settings', array() );
 	return $key ? ( $settings[ $key ] ?? null ) : $settings;
 }
@@ -347,7 +356,10 @@ function wpo_ips_edi_get_tax_settings(): array {
  */
 function wpo_ips_edi_is_available(): bool {
 	// Check `sabre/xml` library here: https://packagist.org/packages/sabre/xml
-	return apply_filters( 'wpo_ips_edi_is_available', WPO_WCPDF()->is_dependency_version_supported( 'php' ) && ! empty( wpo_ips_edi_get_settings( 'enabled' ) ) );
+	return (bool) apply_filters(
+		'wpo_ips_edi_is_available',
+		( WPO_WCPDF()->is_dependency_version_supported( 'php' ) && ! empty( wpo_ips_edi_get_settings( 'enabled' ) ) )
+	);
 }
 
 /**
@@ -357,7 +369,11 @@ function wpo_ips_edi_is_available(): bool {
  */
 function wpo_ips_edi_peppol_is_available(): bool {
 	$format = wpo_ips_edi_get_current_format();
-	return apply_filters( 'wpo_ips_edi_peppol_is_available', wpo_ips_edi_is_available() && ! empty( $format ) && false !== strpos( $format, 'peppol' ) );
+
+	return (bool) apply_filters(
+		'wpo_ips_edi_peppol_is_available',
+		( wpo_ips_edi_is_available() && ! empty( $format ) && false !== strpos( $format, 'peppol' ) )
+	);
 }
 
 /**
@@ -369,7 +385,7 @@ function wpo_ips_edi_peppol_is_available(): bool {
  *
  * @return string|false
  */
-function wpo_ips_edi_write_file( \WPO\IPS\Documents\OrderDocument $document, bool $attachment = false, bool $contents_only = false ) {
+function wpo_ips_edi_write_file( \WPO\IPS\Documents\OrderDocument $document, bool $attachment = false, bool $contents_only = false ): string|false {
 	$edi_maker = wpo_ips_edi_get_maker();
 
 	if ( ! $edi_maker ) {
@@ -377,9 +393,9 @@ function wpo_ips_edi_write_file( \WPO\IPS\Documents\OrderDocument $document, boo
 	}
 
 	if ( $attachment ) {
-		$tmp_path = WPO_WCPDF()->main->get_tmp_path( 'attachments' );
+		$tmp_path = WPO_WCPDF()->get_instance( 'main' )->ensure_tmp_path( 'attachments' );
 
-		if ( ! $tmp_path ) {
+		if ( false === $tmp_path ) {
 			return wcpdf_error_handling( 'Temporary path not available. Cannot write EDI file.' );
 		}
 
@@ -401,7 +417,8 @@ function wpo_ips_edi_write_file( \WPO\IPS\Documents\OrderDocument $document, boo
 	$edi_document = new \WPO\IPS\EDI\Document( $syntax, $format, $document );
 	$builder      = new \WPO\IPS\EDI\SabreBuilder();
 
-	$contents = apply_filters( 'wpo_ips_edi_contents',
+	$contents = apply_filters(
+		'wpo_ips_edi_contents',
 		$builder->build( $edi_document ),
 		$edi_document,
 		$document
@@ -433,7 +450,7 @@ function wpo_ips_edi_write_file( \WPO\IPS\Documents\OrderDocument $document, boo
  * @param int|false $size
  * @return void
  */
-function wpo_ips_edi_file_headers( string $filename, $size ): void {
+function wpo_ips_edi_file_headers( string $filename, int|false $size ): void {
 	$charset = apply_filters( 'wpo_ips_edi_file_header_content_type_charset', 'UTF-8' );
 
 	header( 'Content-Description: File Transfer' );
@@ -454,8 +471,14 @@ function wpo_ips_edi_file_headers( string $filename, $size ): void {
  * @return string|null
  */
 function wpo_ips_edi_get_current_syntax(): ?string {
-	$syntax = wpo_ips_edi_get_settings( 'syntax' );
-	return apply_filters( 'wpo_ips_edi_current_syntax', $syntax ?: null );
+	$syntax = apply_filters(
+		'wpo_ips_edi_current_syntax',
+		wpo_ips_edi_get_settings( 'syntax' ) ?: null
+	);
+
+	return is_string( $syntax )
+		? $syntax
+		: null;
 }
 
 /**
@@ -464,7 +487,7 @@ function wpo_ips_edi_get_current_syntax(): ?string {
  * @param bool $full_details Optional. If true, returns full format details.
  * @return string|array|null
  */
-function wpo_ips_edi_get_current_format( bool $full_details = false ) {
+function wpo_ips_edi_get_current_format( bool $full_details = false ): string|array|null {
 	$syntax = wpo_ips_edi_get_settings( 'syntax' );
 	$format = null;
 
@@ -476,7 +499,16 @@ function wpo_ips_edi_get_current_format( bool $full_details = false ) {
 		}
 	}
 
-	return apply_filters( 'wpo_ips_edi_current_format', $format ?: null, $syntax, $full_details );
+	$format = apply_filters(
+		'wpo_ips_edi_current_format',
+		$format ?: null,
+		$syntax,
+		$full_details
+	);
+
+	return is_string( $format ) || is_array( $format )
+		? $format
+		: null;
 }
 
 /**
@@ -494,7 +526,10 @@ function wpo_ips_edi_send_attachments(): bool {
  * @return bool
  */
 function wpo_ips_edi_embed_encrypted_pdf(): bool {
-	return apply_filters( 'wpo_ips_edi_embed_encrypted_pdf', ! empty( wpo_ips_edi_get_settings( 'embed_encrypted_pdf' ) ) );
+	return (bool) apply_filters(
+		'wpo_ips_edi_embed_encrypted_pdf',
+		! empty( wpo_ips_edi_get_settings( 'embed_encrypted_pdf' ) )
+	);
 }
 
 /**
@@ -503,7 +538,10 @@ function wpo_ips_edi_embed_encrypted_pdf(): bool {
  * @return bool
  */
 function wpo_ips_edi_include_item_meta(): bool {
-	return apply_filters( 'wpo_ips_edi_include_item_meta', ! empty( wpo_ips_edi_get_settings( 'include_item_meta' ) ) );
+	return (bool) apply_filters(
+		'wpo_ips_edi_include_item_meta',
+		! empty( wpo_ips_edi_get_settings( 'include_item_meta' ) )
+	);
 }
 
 /**
@@ -527,7 +565,10 @@ function wpo_ips_edi_syntaxes(): array {
 		$syntaxes[ $slug ] = $data['name'];
 	}
 
-	return apply_filters( 'wpo_ips_edi_syntaxes', $syntaxes );
+	return (array) apply_filters(
+		'wpo_ips_edi_syntaxes',
+		$syntaxes
+	);
 }
 
 /**
@@ -575,6 +616,13 @@ function wpo_ips_edi_syntax_formats( string $syntax = '', string $format = '' ):
 							'invoice' => \WPO\IPS\EDI\Syntaxes\Cii\Formats\CiiD16B\Invoice::class,
 						),
 					),
+					'cii-d22b' => array(
+						'name'      => 'CII D22B',
+						'hybrid'    => false,
+						'documents' => array(
+							'invoice' => \WPO\IPS\EDI\Syntaxes\Cii\Formats\CiiD22B\Invoice::class,
+						),
+					),
 					'factur-x-1p0' => array(
 						'name'      => 'Factur-X 1.0',
 						'hybrid'    => true,
@@ -594,6 +642,13 @@ function wpo_ips_edi_syntax_formats( string $syntax = '', string $format = '' ):
 						'hybrid'    => true,
 						'documents' => array(
 							'invoice' => \WPO\IPS\EDI\Syntaxes\Cii\Formats\Zugferd2p0\Invoice::class,
+						),
+					),
+					'zugferd-2p5' => array(
+						'name'      => 'ZUGFeRD 2.5',
+						'hybrid'    => true,
+						'documents' => array(
+							'invoice' => \WPO\IPS\EDI\Syntaxes\Cii\Formats\Zugferd2p5\Invoice::class,
 						),
 					),
 				),
@@ -771,7 +826,7 @@ function wpo_ips_edi_format_vat_number( string $vat_number, string $billing_coun
 
 	$formatted = '' !== $country ? $country . $parts['id'] : $parts['id'];
 
-	return apply_filters(
+	return (string) apply_filters(
 		'wpo_ips_edi_format_vat_number',
 		$formatted,
 		$vat_number,
@@ -796,11 +851,42 @@ function wpo_ips_edi_get_order_customer_vat_number( \WC_Order $order ): ?string 
 		);
 	}
 
-	return apply_filters(
+	$vat_number = apply_filters(
 		'wpo_ips_edi_order_customer_vat_number',
 		! empty( $vat_number ) ? $vat_number : null,
 		$order
 	);
+
+	return is_string( $vat_number )
+		? $vat_number
+		: null;
+}
+
+/**
+ * Get the formatted customer company registration number for EDI output.
+ *
+ * @param \WC_Order $order Order object.
+ * @return string|null
+ */
+function wpo_ips_edi_get_order_customer_registration_number( \WC_Order $order ): ?string {
+	$registration_number = wpo_wcpdf_get_order_customer_registration_number( $order );
+
+	if ( ! empty( $registration_number ) ) {
+		$registration_number = wpo_ips_edi_format_registration_number(
+			(string) $registration_number,
+			$order->get_billing_country()
+		);
+	}
+
+	$registration_number = apply_filters(
+		'wpo_ips_edi_order_customer_registration_number',
+		! empty( $registration_number ) ? $registration_number : null,
+		$order
+	);
+
+	return is_string( $registration_number )
+		? $registration_number
+		: null;
 }
 
 /**
@@ -851,16 +937,14 @@ function wpo_ips_edi_build_peppol_endpoint_candidates_from_vat( string $billing_
 		return array();
 	}
 
-	$mappings = wpo_ips_edi_get_peppol_vat_mappings();
+	$configs = wpo_ips_edi_get_identifier_mappings(
+		$billing_country,
+		'vat_number'
+	);
 
-	if ( empty( $mappings[ $billing_country ] ) ) {
+	if ( empty( $configs ) || ! is_array( $configs ) ) {
 		return array();
 	}
-
-	$cfg     = $mappings[ $billing_country ];
-	$configs = ! empty( $cfg['mappings'] ) && is_array( $cfg['mappings'] )
-		? $cfg['mappings']
-		: array( $cfg );
 
 	$candidates = array();
 
@@ -930,346 +1014,15 @@ function wpo_ips_edi_build_peppol_endpoint_candidates_from_vat( string $billing_
 }
 
 /**
- * Get PEPPOL VAT number mappings.
+ * Get identifier mappings by country.
  *
- * @return array
+ * @param string $country Optional country code in ISO 3166-1 alpha-2 format.
+ * @param string $type    Optional identifier type, e.g. 'vat_number' or 'registration_number'.
+ * @param string $key     Optional mapping key, e.g. 'eas', 'icd' or 'label'.
+ * @return array|string
  */
-function wpo_ips_edi_get_peppol_vat_mappings(): array {
-	$mappings = array(
-		'AT' => array(
-			'name'     => 'Austria',
-			'mappings' => array(
-				array(
-					'eas'            => '9914',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 11,
-				),
-			),
-		),
-		'BE' => array(
-			'name'     => 'Belgium',
-			'mappings' => array(
-				array(
-					'eas'            => '0208',
-					'strip_prefixes' => array( 'BE' ),
-					'keep_pattern'   => '/\d+/',
-					'length'         => 10,
-				),
-				array(
-					'eas'            => '9925',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 12,
-				),
-			),
-		),
-		'BG' => array(
-			'name'     => 'Bulgaria',
-			'mappings' => array(
-				array(
-					'eas'            => '9926',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => array( 11, 12 ),
-				),
-			),
-		),
-		'CY' => array(
-			'name'     => 'Cyprus',
-			'mappings' => array(
-				array(
-					'eas'            => '9928',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 11,
-				),
-			),
-		),
-		'CZ' => array(
-			'name'     => 'Czech Republic',
-			'mappings' => array(
-				array(
-					'eas'            => '9929',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => array( 10, 11, 12 ),
-				),
-			),
-		),
-		'DE' => array(
-			'name'     => 'Germany',
-			'mappings' => array(
-				array(
-					'eas'            => '9930',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 11,
-				),
-			),
-		),
-		'DK' => array(
-			'name'     => 'Denmark',
-			'mappings' => array(
-				array(
-					'eas'            => '0184',
-					'strip_prefixes' => array( 'DK' ),
-					'keep_pattern'   => '/\d+/',
-					'length'         => 8,
-				),
-			),
-		),
-		'EE' => array(
-			'name'     => 'Estonia',
-			'mappings' => array(
-				array(
-					'eas'            => '9931',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 11,
-				),
-			),
-		),
-		'ES' => array(
-			'name'     => 'Spain',
-			'mappings' => array(
-				array(
-					'eas'            => '9920',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 11,
-				),
-			),
-		),
-		'FI' => array(
-			'name'     => 'Finland',
-			'mappings' => array(
-				array(
-					'eas'            => '0213',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 10,
-				),
-			),
-		),
-		'FR' => array(
-			'name'     => 'France',
-			'mappings' => array(
-				array(
-					'eas'            => '0002',
-					'strip_prefixes' => array( 'FR' ),
-					'keep_pattern'   => '/\d{9}$/',
-					'length'         => 9,
-				),
-				array(
-					'eas'            => '9957',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 13,
-				),
-			),
-		),
-		'GB' => array(
-			'name'     => 'United Kingdom',
-			'mappings' => array(
-				array(
-					'eas'            => '9932',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => array( 11, 14 ),
-				),
-			),
-		),
-		'GR' => array(
-			'name'     => 'Greece',
-			'mappings' => array(
-				array(
-					'eas'            => '9933',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 11,
-				),
-			),
-		),
-		'HR' => array(
-			'name'     => 'Croatia',
-			'mappings' => array(
-				array(
-					'eas'            => '9934',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 13,
-				),
-			),
-		),
-		'HU' => array(
-			'name'     => 'Hungary',
-			'mappings' => array(
-				array(
-					'eas'            => '9910',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 10,
-				),
-			),
-		),
-		'IE' => array(
-			'name'     => 'Ireland',
-			'mappings' => array(
-				array(
-					'eas'            => '9935',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => array( 10, 11 ),
-				),
-			),
-		),
-		'IT' => array(
-			'name'     => 'Italy',
-			'mappings' => array(
-				array(
-					'eas'            => '0211',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 13,
-				),
-			),
-		),
-		'LT' => array(
-			'name'     => 'Lithuania',
-			'mappings' => array(
-				array(
-					'eas'            => '9937',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => array( 11, 14 ),
-				),
-			),
-		),
-		'LU' => array(
-			'name'     => 'Luxembourg',
-			'mappings' => array(
-				array(
-					'eas'            => '9938',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 10,
-				),
-			),
-		),
-		'LV' => array(
-			'name'     => 'Latvia',
-			'mappings' => array(
-				array(
-					'eas'            => '9939',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 13,
-				),
-			),
-		),
-		'MT' => array(
-			'name'     => 'Malta',
-			'mappings' => array(
-				array(
-					'eas'            => '9943',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 10,
-				),
-			),
-		),
-		'NL' => array(
-			'name'     => 'Netherlands',
-			'mappings' => array(
-				array(
-					'eas'            => '9944',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 14,
-				),
-			),
-		),
-		'NO' => array(
-			'name'     => 'Norway',
-			'mappings' => array(
-				array(
-					'eas'            => '0192',
-					'strip_prefixes' => array( 'NO' ),
-					'keep_pattern'   => '/\d+/',
-					'length'         => 9,
-				),
-			),
-		),
-		'PL' => array(
-			'name'     => 'Poland',
-			'mappings' => array(
-				array(
-					'eas'            => '9945',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 12,
-				),
-			),
-		),
-		'PT' => array(
-			'name'     => 'Portugal',
-			'mappings' => array(
-				array(
-					'eas'            => '9946',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 11,
-				),
-			),
-		),
-		'RO' => array(
-			'name'     => 'Romania',
-			'mappings' => array(
-				array(
-					'eas'            => '9947',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => range( 4, 12 ),
-				),
-			),
-		),
-		'SE' => array(
-			'name'     => 'Sweden',
-			'mappings' => array(
-				array(
-					'eas'            => '0007',
-					'strip_prefixes' => array( 'SE' ),
-					'keep_pattern'   => '/^\d{10}/',
-					'length'         => 10,
-				),
-			),
-		),
-		'SI' => array(
-			'name'     => 'Slovenia',
-			'mappings' => array(
-				array(
-					'eas'            => '9949',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 10,
-				),
-			),
-		),
-		'SK' => array(
-			'name'     => 'Slovakia',
-			'mappings' => array(
-				array(
-					'eas'            => '9950',
-					'strip_prefixes' => array(),
-					'keep_pattern'   => '/[A-Z0-9]+/',
-					'length'         => 12,
-				),
-			),
-		),
-	);
-
-	return apply_filters( 'wpo_ips_edi_peppol_vat_mappings', $mappings );
+function wpo_ips_edi_get_identifier_mappings( string $country = '', string $type = '', string $key = '' ): array|string {
+	return \WPO\IPS\EDI\IdentifierMappings::get( $country, $type, $key );
 }
 
 /**
@@ -1303,11 +1056,12 @@ function wpo_ips_edi_format_registration_number( string $registration_number, st
  * @return array
  */
 function wpo_ips_edi_get_supplier_identifiers_data(): array {
-	$general_settings = WPO_WCPDF()->settings->general;
-	$language         = wpo_ips_edi_get_settings( 'supplier_identifiers_language' );
+	$general_settings_instance = WPO_WCPDF()->get_instance( 'settings' )->get_instance( 'general' );
+	$language                  = wpo_ips_edi_get_settings( 'supplier_identifiers_language' );
 	
-	$supplier_country = $general_settings->get_setting( 'shop_address_country', $language );
-	$supplier_vat     = $general_settings->get_setting( 'vat_number', $language );
+	$supplier_country          = $general_settings_instance->get_setting( 'shop_address_country', $language );
+	$supplier_vat              = $general_settings_instance->get_setting( 'vat_number', $language );
+	$registration_number_label = wpo_ips_edi_get_identifier_mappings( (string) $supplier_country, 'registration_number', 'label' );
 
 	if ( ! empty( $supplier_vat ) ) {
 		$supplier_vat = wpo_ips_edi_format_vat_number(
@@ -1316,7 +1070,7 @@ function wpo_ips_edi_get_supplier_identifiers_data(): array {
 		);
 	}
 	
-	$data             = array();
+	$data = array();
 
 	if ( empty( $language ) ) {
 		$language = 'default';
@@ -1325,32 +1079,32 @@ function wpo_ips_edi_get_supplier_identifiers_data(): array {
 	$data[ $language ] = array(
 		'name' => array(
 			'label'    => __( 'Name', 'woocommerce-pdf-invoices-packing-slips' ),
-			'value'    => $general_settings->get_setting( 'shop_name', $language ),
+			'value'    => $general_settings_instance->get_setting( 'shop_name', $language ),
 			'required' => true,
 		),
 		'address' => array(
 			'label'    => __( 'Street address', 'woocommerce-pdf-invoices-packing-slips' ),
-			'value'    => $general_settings->get_setting( 'shop_address_line_1', $language ),
+			'value'    => $general_settings_instance->get_setting( 'shop_address_line_1', $language ),
 			'required' => true,
 		),
 		'postcode' => array(
 			'label'    => __( 'Postcode', 'woocommerce-pdf-invoices-packing-slips' ),
-			'value'    => $general_settings->get_setting( 'shop_address_postcode', $language ),
+			'value'    => $general_settings_instance->get_setting( 'shop_address_postcode', $language ),
 			'required' => true,
 		),
 		'city' => array(
 			'label'    => __( 'City', 'woocommerce-pdf-invoices-packing-slips' ),
-			'value'    => $general_settings->get_setting( 'shop_address_city', $language ),
+			'value'    => $general_settings_instance->get_setting( 'shop_address_city', $language ),
 			'required' => true,
 		),
 		'state' => array(
 			'label'    => __( 'State', 'woocommerce-pdf-invoices-packing-slips' ),
-			'value'    => $general_settings->get_setting( 'shop_address_state', $language ),
+			'value'    => $general_settings_instance->get_setting( 'shop_address_state', $language ),
 			'required' => false,
 		),
 		'country' => array(
 			'label'    => __( 'Country Code', 'woocommerce-pdf-invoices-packing-slips' ),
-			'value'    => $general_settings->get_setting( 'shop_address_country', $language ),
+			'value'    => $general_settings_instance->get_setting( 'shop_address_country', $language ),
 			'required' => true,
 		),
 		'vat_number' => array(
@@ -1359,13 +1113,13 @@ function wpo_ips_edi_get_supplier_identifiers_data(): array {
 			'required' => true,
 		),
 		'coc_number' => array(
-			'label'    => __( 'Registration number', 'woocommerce-pdf-invoices-packing-slips' ),
-			'value'    => $general_settings->get_setting( 'coc_number', $language ),
+			'label'    => $registration_number_label,
+			'value'    => $general_settings_instance->get_setting( 'coc_number', $language ),
 			'required' => false,
 		),
 		'email' => array(
 			'label'    => __( 'Email', 'woocommerce-pdf-invoices-packing-slips' ),
-			'value'    => $general_settings->get_setting( 'shop_email_address', $language ),
+			'value'    => $general_settings_instance->get_setting( 'shop_email_address', $language ),
 			'required' => true,
 		),
 	);
@@ -1383,11 +1137,11 @@ function wpo_ips_edi_get_supplier_identifiers_data(): array {
 		);
 	}
 
-	return apply_filters(
+	return (array) apply_filters(
 		'wpo_ips_edi_supplier_identifier_data',
 		$data,
 		$language,
-		$general_settings
+		$general_settings_instance
 	);
 }
 
@@ -1432,7 +1186,7 @@ function wpo_ips_edi_get_order_customer_identifiers_data( \WC_Order $order ): ar
 		'vat_number' => array(
 			'label'    => __( 'VAT number', 'woocommerce-pdf-invoices-packing-slips' ),
 			'value'    => wpo_ips_edi_get_order_customer_vat_number( $order ),
-			'required' => true,
+			'required' => wpo_ips_edi_peppol_is_available(),
 		),
 		'email' => array(
 			'label'    => __( 'Email', 'woocommerce-pdf-invoices-packing-slips' ),
@@ -1440,6 +1194,19 @@ function wpo_ips_edi_get_order_customer_identifiers_data( \WC_Order $order ): ar
 			'required' => true,
 		),
 	);
+
+	$checkout_field      = \WPO_WCPDF()->get_instance( 'checkout_field' );
+	$registration_number = wpo_ips_edi_get_order_customer_registration_number( $order );
+
+	if ( null !== $registration_number || $checkout_field->is_type( \WPO\IPS\CheckoutField::TYPE_REGISTRATION_NUMBER ) ) {
+		$data['registration_number'] = array(
+			'label'    => in_array( \WPO\IPS\CheckoutField::TYPE_REGISTRATION_NUMBER, $checkout_field->get_field_types(), true )
+				? $checkout_field->get_label( \WPO\IPS\CheckoutField::TYPE_REGISTRATION_NUMBER )
+				: $checkout_field->get_default_label( \WPO\IPS\CheckoutField::TYPE_REGISTRATION_NUMBER, $order->get_billing_country() ),
+			'value'    => $registration_number,
+			'required' => false,
+		);
+	}
 
 	if ( wpo_ips_edi_peppol_is_available() ) {
 		$user_id         = $order->get_customer_id();
@@ -1463,7 +1230,7 @@ function wpo_ips_edi_get_order_customer_identifiers_data( \WC_Order $order ): ar
 		);
 	}
 
-	return apply_filters(
+	return (array) apply_filters(
 		'wpo_ips_edi_order_customer_identifier_data',
 		$data,
 		$order
@@ -1518,10 +1285,11 @@ function wpo_ips_edi_peppol_identifier_input_mode(): string {
  * - select mode: text = identifier; scheme from <select>
  *                (but if user typed scheme:identifier we respect that)
  *
- * @param int   $user_id User ID.
- * @param array $request $_POST / REST payload.
+ * @param int   $user_id     User ID.
+ * @param array $request     $_POST / REST payload.
+ * @param bool  $allow_clear Delete stored user meta when an empty identifier is explicitly sent.
  */
-function wpo_ips_edi_peppol_save_customer_identifiers( int $user_id, array $request ): void {
+function wpo_ips_edi_peppol_save_customer_identifiers( int $user_id, array $request, bool $allow_clear = false ): void {
 	if ( $user_id <= 0 ) {
 		return;
 	}
@@ -1542,6 +1310,14 @@ function wpo_ips_edi_peppol_save_customer_identifiers( int $user_id, array $requ
 		}
 
 		$raw    = trim( sanitize_text_field( wp_unslash( $request[ $id_key ] ) ) );
+
+		// Explicitly cleared: remove stored identifier and scheme.
+		if ( $allow_clear && '' === $raw ) {
+			delete_user_meta( $user_id, $id_key );
+			delete_user_meta( $user_id, $scheme_key );
+			continue;
+		}
+
 		$scheme = $identifier = '';
 
 		// Determine parts
@@ -1594,7 +1370,7 @@ function wpo_ips_edi_peppol_save_customer_identifiers( int $user_id, array $requ
  * @return \WC_Order
  */
 function wpo_ips_edi_get_parent_order( \WC_Abstract_Order $order ): \WC_Order {
-	if ( is_a( $order, 'WC_Order_Refund' ) ) {
+	if ( $order instanceof \WC_Order_Refund ) {
 		$parent_id = $order->get_parent_id();
 		if ( $parent_id ) {
 			$parent_order = wc_get_order( $parent_id );

@@ -29,36 +29,35 @@ class Peppol {
 	 * Constructor
 	 */
 	public function __construct() {
-		if (  ! wpo_ips_edi_peppol_is_available() ) {
-			return;
-		}
-		
-		add_filter( 'woocommerce_account_menu_items', array( $this, 'peppol_account_menu_item' ), 10, 2 );
+		// REST / Store API / checkout processing hooks.
 		add_action( 'rest_api_init', array( $this, 'peppol_register_checkout_autofill_endpoint_route' ) );
+
+		$this->peppol_display_checkout_block_fields();
+		$this->peppol_set_checkout_block_fields_value();
+
+		add_action( 'woocommerce_set_additional_field_value', array( $this, 'peppol_save_checkout_block_fields' ), 10, 4 );
+		add_action( 'woocommerce_store_api_checkout_order_processed', array( $this, 'peppol_remove_order_checkout_block_fields_meta' ), 10, 1 );
 
 		// Peppol Endpoint Derivation
 		add_action( 'woocommerce_checkout_order_created', array( $this, 'peppol_handle_new_order_automatic_endpoint_id_derivation' ), 999, 1 );
 		add_action( 'woocommerce_store_api_checkout_order_processed', array( $this, 'peppol_handle_new_order_automatic_endpoint_id_derivation' ), 999, 1 );
 
+		add_rewrite_endpoint( 'peppol', EP_PAGES );
+
+		if ( ! \wpo_ips_is_frontend_page_request() ) {
+			return;
+		}
+
+		// Pure frontend page hooks only.
+		add_filter( 'woocommerce_account_menu_items', array( $this, 'peppol_account_menu_item' ), 10, 2 );
 		add_action( 'template_redirect', array( $this, 'save_peppol_settings' ) );
 		add_action( 'woocommerce_account_peppol_endpoint', array( $this, 'peppol_settings_account_page' ) );
 
-		add_rewrite_endpoint( 'peppol', EP_PAGES );
-
-		// Classic checkout hooks
 		add_filter( 'woocommerce_checkout_fields', array( $this, 'peppol_display_classic_checkout_fields' ), 10, 1 );
 		add_filter( 'woocommerce_checkout_get_value', array( $this, 'peppol_set_classic_checkout_fields_value' ), 10, 2 );
 		add_action( 'woocommerce_after_checkout_validation', array( $this, 'peppol_validate_classic_checkout_field_values' ), 10, 2 );
 		add_action( 'woocommerce_checkout_update_order_meta', array( $this, 'peppol_save_classic_checkout_fields' ), 10, 2 );
-		
-		// Blocks/store-api hooks
-		$this->peppol_display_checkout_block_fields();
-		$this->peppol_set_checkout_block_fields_value();
-		
-		add_action( 'woocommerce_set_additional_field_value', array( $this, 'peppol_save_checkout_block_fields' ), 10, 4 );
-		add_action( 'woocommerce_store_api_checkout_order_processed', array( $this, 'peppol_remove_order_checkout_block_fields_meta' ), 10, 1 );
 
-		// Enqueue scripts for both classic and block checkout.
 		add_action( 'wp_enqueue_scripts', array( $this, 'peppol_enqueue_checkout_scripts' ), 20 );
 	}
 
@@ -209,7 +208,7 @@ class Peppol {
 
 		$user_id = get_current_user_id();
 
-		wpo_ips_edi_peppol_save_customer_identifiers( $user_id, $request );
+		wpo_ips_edi_peppol_save_customer_identifiers( $user_id, $request, true );
 
 		wc_add_notice( __( 'Peppol settings saved.', 'woocommerce-pdf-invoices-packing-slips' ), 'success' );
 		wp_safe_redirect( wc_get_account_endpoint_url( 'peppol' ) );
@@ -311,6 +310,10 @@ class Peppol {
 	 * @return void
 	 */
 	public function peppol_set_checkout_block_fields_value(): void {
+		if ( ! wpo_ips_edi_peppol_enabled_for_location( 'checkout' ) ) {
+			return;
+		}
+
 		$fields = array(
 			'wpo-ips-edi/peppol-endpoint-id',
 			'wpo-ips-edi/peppol-endpoint-eas',
@@ -721,6 +724,39 @@ class Peppol {
 	}
 
 	/**
+	 * Derive a Peppol Endpoint ID from an order VAT number.
+	 *
+	 * Uses the order billing country and VAT number to build the available
+	 * Peppol Endpoint ID candidates and returns the first participant found
+	 * in the Peppol Directory.
+	 *
+	 * @param \WC_Order $order WooCommerce order object.
+	 * @return array|\WP_Error Derived endpoint data on success, or WP_Error on failure.
+	 */
+	public function peppol_derive_endpoint_from_order( \WC_Order $order ): array|\WP_Error {
+		$billing_country = trim( (string) $order->get_billing_country() );
+		$vat_number      = trim( (string) wpo_wcpdf_get_order_customer_vat_number( $order ) );
+
+		if ( empty( $billing_country ) || empty( $vat_number ) ) {
+			return new \WP_Error(
+				'peppol_endpoint_missing_data',
+				__( 'Missing billing country or VAT number.', 'woocommerce-pdf-invoices-packing-slips' )
+			);
+		}
+
+		$result = $this->peppol_find_valid_endpoint_from_vat( $billing_country, $vat_number );
+
+		if ( empty( $result['endpoint_id'] ) || empty( $result['eas'] ) ) {
+			return new \WP_Error(
+				'peppol_endpoint_not_found',
+				__( 'No valid Peppol Endpoint ID could be derived from the VAT number.', 'woocommerce-pdf-invoices-packing-slips' )
+			);
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Handle automatic Peppol Endpoint ID derivation on new order creation.
 	 *
 	 * @param \WC_Order $order
@@ -737,37 +773,51 @@ class Peppol {
 			return;
 		}
 
-		$order->read_meta_data( true );
+		$billing_country = strtoupper( trim( (string) $order->get_billing_country() ) );
+		$countries       = array_map( 'strtoupper', (array) wpo_ips_edi_get_settings( 'peppol_automatic_endpoint_id_derivation_countries' ) );
 
-		$billing_country = $order->get_billing_country();
-		$vat_number      = wpo_wcpdf_get_order_customer_vat_number( $order );
-
-		if ( empty( $billing_country ) || empty( $vat_number ) ) {
+		if ( ! in_array( $billing_country, $countries, true ) ) {
 			wpo_ips_edi_log(
 				sprintf(
-					'Automatic Peppol Endpoint ID derivation skipped for order #%d: missing billing country or VAT number.',
-					$order_id
+					'Automatic Peppol Endpoint ID derivation skipped for order #%d: billing country "%s" is not selected for automatic derivation.',
+					$order_id,
+					$billing_country
 				)
 			);
-
 			return;
 		}
 
 		wpo_ips_edi_log(
 			sprintf(
-				'Attempting automatic Peppol Endpoint ID derivation for order #%d using billing country "%s".',
-				$order_id,
-				$billing_country
+				'Attempting automatic Peppol Endpoint ID derivation for order #%d.',
+				$order_id
 			)
 		);
 
-		$result = $this->peppol_find_valid_endpoint_from_vat( $billing_country, $vat_number );
+		$order->read_meta_data( true );
 
-		if ( empty( $result['endpoint_id'] ) || empty( $result['eas'] ) ) {
+		$result = $this->peppol_derive_endpoint_from_order( $order );
+
+		if ( is_wp_error( $result ) ) {
+			if ( 'peppol_endpoint_missing_data' === $result->get_error_code() ) {
+				wpo_ips_edi_log(
+					sprintf(
+						'Automatic Peppol Endpoint ID derivation skipped for order #%d with error code "%s": %s',
+						$order_id,
+						$result->get_error_code(),
+						$result->get_error_message()
+					)
+				);
+
+				return;
+			}
+
 			wpo_ips_edi_log(
 				sprintf(
-					'Automatic Peppol Endpoint ID derivation failed for order #%d: no valid Endpoint ID or EAS was found.',
-					$order_id
+					'Automatic Peppol Endpoint ID derivation failed for order #%d with error code "%s": %s',
+					$order_id,
+					$result->get_error_code(),
+					$result->get_error_message()
 				),
 				'warning'
 			);
@@ -864,7 +914,7 @@ class Peppol {
 					'wpo_ips_edi_peppol_classic_checkout_input_wrapper_selector',
 					'#peppol_endpoint_id_field'
 				),
-				'vat_field_selector'             => \WPO_WCPDF()->vat_plugins->get_form_selector( 'classic' ),
+				'vat_field_selector'             => \WPO_WCPDF()->get_instance( 'vat_plugins' )->get_form_selector( 'classic' ),
 				'peppol_autofill_endpoint_route' => '/wpo-ips/v1/peppol-endpoint',
 				'override_link_text'             => __( 'Override (edit manually)', 'woocommerce-pdf-invoices-packing-slips' ),
 			)
@@ -932,7 +982,7 @@ class Peppol {
 					'wpo_ips_edi_peppol_block_checkout_input_wrapper_selector',
 					'.wc-block-components-address-form__wpo-ips-edi-peppol-endpoint-id'
 				),
-				'vat_field_selector'             => \WPO_WCPDF()->vat_plugins->get_form_selector( 'block' ),
+				'vat_field_selector'             => \WPO_WCPDF()->get_instance( 'vat_plugins' )->get_form_selector( 'block' ),
 				'peppol_autofill_endpoint_route' => '/wpo-ips/v1/peppol-endpoint',
 				'override_link_text'             => __( 'Override (edit manually)', 'woocommerce-pdf-invoices-packing-slips' ),
 			)
@@ -1244,8 +1294,15 @@ class Peppol {
 		$base_url = 'https://directory.peppol.eu/search/1.0/json';
 
 		$query_args['beautify'] = 'true';
+		ksort( $query_args );
 
-		$url = $base_url . '?' . http_build_query( $query_args, '', '&', PHP_QUERY_RFC3986 );
+		$url       = $base_url . '?' . http_build_query( $query_args, '', '&', PHP_QUERY_RFC3986 );
+		$cache_key = 'wpo_ips_peppol_directory_' . md5( $url );
+		$cached    = get_transient( $cache_key );
+
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
 
 		$response = wp_remote_get(
 			$url,
@@ -1287,6 +1344,10 @@ class Peppol {
 				__( 'Peppol Directory returned an invalid JSON response.', 'woocommerce-pdf-invoices-packing-slips' )
 			);
 		}
+
+		// Reuse successful responses across requests; retry missing participants sooner.
+		$expiration = empty( $data['matches'] ) ? MINUTE_IN_SECONDS : 15 * MINUTE_IN_SECONDS;
+		set_transient( $cache_key, $data, $expiration );
 
 		return $data;
 	}
@@ -1340,7 +1401,14 @@ class Peppol {
 				continue;
 			}
 
-			if ( $this->peppol_directory_participant_exists( (string) $candidate['endpoint_id'] ) ) {
+			$exists = $this->peppol_directory_participant_exists( (string) $candidate['endpoint_id'] );
+
+			// A directory failure is not a missing participant. Stop further requests for this lookup.
+			if ( is_wp_error( $exists ) ) {
+				return array();
+			}
+
+			if ( $exists ) {
 				return $candidate;
 			}
 		}
@@ -1352,13 +1420,13 @@ class Peppol {
 	 * Check whether a Peppol participant exists in the Directory.
 	 *
 	 * @param string $endpoint_id Endpoint ID.
-	 * @return bool
+	 * @return bool|\WP_Error
 	 */
-	private function peppol_directory_participant_exists( string $endpoint_id ): bool {
+	private function peppol_directory_participant_exists( string $endpoint_id ): bool|\WP_Error {
 		$data = $this->peppol_directory_request_by_participant( $endpoint_id );
 
 		if ( is_wp_error( $data ) ) {
-			return false;
+			return $data;
 		}
 
 		$matches     = isset( $data['matches'] ) && is_array( $data['matches'] ) ? $data['matches'] : array();

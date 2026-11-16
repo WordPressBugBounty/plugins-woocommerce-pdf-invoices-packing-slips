@@ -39,28 +39,31 @@ abstract class AbstractHandler implements HandlerInterface {
 	 * @return string
 	 */
 	protected function get_supplier_identifiers_data( string $key ): string {
-		$general_settings = WPO_WCPDF()->settings->general;
-		$language         = wpo_ips_edi_get_settings( 'supplier_identifiers_language' );
+		$general_settings_instance = WPO_WCPDF()->get_instance( 'settings' )->get_instance( 'general' );
+		$language                  = wpo_ips_edi_get_settings( 'supplier_identifiers_language' );
 
 		if ( empty( $language ) ) {
 			$language = 'default';
 		}
 
-		$value   = $general_settings->get_setting( $key, $language ) ?: '';
-		$country = $general_settings->get_setting( 'shop_address_country', $language ) ?: '';
+		$value = $general_settings_instance->get_setting( $key, $language ) ?: '';
 
-		if ( 'vat_number' === $key && '' !== $value ) {
-			$value = wpo_ips_edi_format_vat_number(
-				(string) $value,
-				(string) $country
-			);
-		}
+		if ( in_array( $key, array( 'vat_number', 'coc_number' ), true ) && '' !== $value ) {
+			$country = $general_settings_instance->get_setting( 'shop_address_country', $language ) ?: '';
 
-		if ( 'coc_number' === $key && '' !== $value ) {
-			$value = wpo_ips_edi_format_registration_number(
-				(string) $value,
-				(string) $country
-			);
+			if ( 'vat_number' === $key ) {
+				$value = wpo_ips_edi_format_vat_number(
+					(string) $value,
+					(string) $country
+				);
+			}
+
+			if ( 'coc_number' === $key ) {
+				$value = wpo_ips_edi_format_registration_number(
+					(string) $value,
+					(string) $country
+				);
+			}
 		}
 
 		return (string) $value;
@@ -89,7 +92,12 @@ abstract class AbstractHandler implements HandlerInterface {
 			? absint( $this->document->order_document->get_setting( 'due_date_days' ) )
 			: 0;
 
-		return apply_filters( 'wpo_ips_edi_due_date_days', $due_date_days, $this->document->order_document, $this );
+		return (int) apply_filters(
+			'wpo_ips_edi_due_date_days',
+			$due_date_days,
+			$this->document->order_document,
+			$this
+		);
 	}
 
 	/**
@@ -182,7 +190,13 @@ abstract class AbstractHandler implements HandlerInterface {
 				break;
 		}
 
-		return apply_filters( 'wpo_ips_edi_payment_means_data', $data, $method_id, $order, $this );
+		return (array) apply_filters(
+			'wpo_ips_edi_payment_means_data',
+			$data,
+			$method_id,
+			$order,
+			$this
+		);
 	}
 
 	/**
@@ -566,7 +580,12 @@ abstract class AbstractHandler implements HandlerInterface {
 			'lines_net'
 		);
 
-		return apply_filters( 'wpo_ips_edi_order_payment_totals', $totals, $order, $this );
+		return (array) apply_filters(
+			'wpo_ips_edi_order_payment_totals',
+			$totals,
+			$order,
+			$this
+		);
 	}
 
 	/**
@@ -920,7 +939,7 @@ abstract class AbstractHandler implements HandlerInterface {
 	 * @return array
 	 */
 	protected function compute_item_price_parts( $item, bool $lock_net_to_subtotal = false ): array {
-		if ( is_a( $item, 'WC_Order_Item_Product' ) ) {
+		if ( $item instanceof \WC_Order_Item_Product ) {
 			$gross_total = (float) $item->get_subtotal();                                                  // ex-VAT, before discounts
 			$net_total   = (float) ( $lock_net_to_subtotal ? $item->get_subtotal() : $item->get_total() ); // ex-VAT, after discounts
 			$qty         = max( 1, absint( $item->get_quantity() ) );
@@ -975,7 +994,7 @@ abstract class AbstractHandler implements HandlerInterface {
 			$this
 		);
 		foreach ( (array) $skip_types as $class ) {
-			if ( is_a( $item, $class ) ) {
+			if ( is_a( $item, $class, true ) ) {
 				$rows = apply_filters( 'wpo_ips_edi_get_item_meta', array(), $item, $args, $this );
 				return is_array( $rows ) ? $rows : array();
 			}

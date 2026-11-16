@@ -17,7 +17,7 @@ class SettingsEDI {
 	/**
 	 * Get the singleton instance of the SettingsEDI class.
 	 *
-	 * @return SettingsEDI
+	 * @return self
 	 */
 	public static function instance(): self {
 		if ( is_null( self::$_instance ) ) {
@@ -29,7 +29,7 @@ class SettingsEDI {
 	/**
 	 * Constructor.
 	 */
-	public function __construct()	{
+	public function __construct() {
 		$this->sections = apply_filters( 'wpo_ips_edi_settings_sections', array(
 			'settings'    => __( 'Settings', 'woocommerce-pdf-invoices-packing-slips' ),
 			'identifiers' => __( 'Identifiers', 'woocommerce-pdf-invoices-packing-slips' ),
@@ -37,11 +37,21 @@ class SettingsEDI {
 			'network'     => __( 'Network', 'woocommerce-pdf-invoices-packing-slips' ),
 		) );
 
-		add_action( 'admin_init', array( $this, 'init_settings' ) );
+		// WP
+		if ( \wpo_ips_is_settings_page() ) {
+			add_action( 'admin_init', array( $this, 'init_settings' ) );
+		}
+		
+		// WP
+		add_filter( 'pre_update_option_wpo_ips_edi_settings', array( $this, 'preserve_peppol_settings' ), 10, 3 );
+		add_filter( 'pre_update_option_wpo_ips_edi_settings', array( $this, 'preserve_registration_number_scheme' ), 10, 2 );
+		
+		// IPS
 		add_action( 'wpo_wcpdf_settings_output_edi', array( $this, 'output_settings' ), 10, 2 );
+		
+		// Woo
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'save_taxes_on_calculate_order_totals' ), 10, 2 );
 		add_action( 'woocommerce_checkout_order_processed', array( $this, 'save_taxes_on_checkout' ), 10, 3 );
-		add_filter( 'pre_update_option_wpo_ips_edi_settings', array( $this, 'preserve_peppol_settings' ), 10, 3 );
 
 		// AJAX
 		add_action( 'wp_ajax_wpo_ips_edi_save_taxes', array( $this, 'ajax_save_taxes' ) );
@@ -58,7 +68,7 @@ class SettingsEDI {
 	 * @return void
 	 */
 	public function output_settings( string $active_section, string $nonce ): void {
-		if ( ! wp_verify_nonce( $nonce, 'wp_wcpdf_settings_page_nonce' ) ) {
+		if ( ! \WPO_WCPDF()->get_instance( 'settings' )->user_can_manage_settings() ) {
 			return;
 		}
 
@@ -116,6 +126,12 @@ class SettingsEDI {
 		$page    = $option_group = $option_name = 'wpo_ips_edi_settings';
 		$section = 'edi';
 
+		$general_settings_instance   = \WPO_WCPDF()->get_instance( 'settings' )->get_instance( 'general' );
+		$shop_country                = (string) $general_settings_instance->get_setting( 'shop_address_country' );
+		$registration_number         = (string) $general_settings_instance->get_setting( 'coc_number' );
+		$registration_number_label   = \wpo_ips_edi_get_identifier_mappings( $shop_country, 'registration_number', 'label' );
+		$default_registration_scheme = \wpo_ips_edi_get_identifier_mappings( $shop_country, 'registration_number', 'icd' );
+
 		$settings_fields = array(
 			array(
 				'type'     => 'section',
@@ -161,15 +177,6 @@ class SettingsEDI {
 				__( 'Choose the preferred %s format.', 'woocommerce-pdf-invoices-packing-slips' ),
 				strtoupper( trim( $syntax ) )
 			);
-
-			if ( 'cii' === strtolower( trim( $syntax ) ) && ! class_exists( 'WCPDF_Custom_PDF_Maker_mPDF' ) ) {
-				$description .= ' ' . sprintf(
-					/* translators: %1$s: open link anchor, %2$s: close link anchor */
-					__( 'The %1$smPDF extension%2$s is required for hybrid formats. Please install or enable it.', 'woocommerce-pdf-invoices-packing-slips' ),
-					'<a href="https://github.com/wpovernight/woocommerce-pdf-ips-mpdf/releases/latest" target="_blank" rel="noopener noreferrer">',
-					'</a>'
-				);
-			}
 
 			$settings_format[] = array(
 				'type'     => 'setting',
@@ -238,6 +245,8 @@ class SettingsEDI {
 				'title'             => __( 'Peppol Endpoint Scheme (EAS)', 'woocommerce-pdf-invoices-packing-slips' ),
 				'option_name'       => $option_name,
 				'id'                => 'peppol_endpoint_eas',
+				'enhanced_select'   => true,
+				'show_empty_option' => true,
 				'options'           => ( function () {
 					$options = array( '' => __( 'Select', 'woocommerce-pdf-invoices-packing-slips' ) . '...' );
 					foreach ( EN16931::get_eas() as $code => $label ) {
@@ -256,9 +265,11 @@ class SettingsEDI {
 					)
 				),
 				'custom_attributes' => array(
-					'data-show_for_option_name'   => $option_name . '[ubl_format]',
-					'data-show_for_option_values' => json_encode( array( 'peppol-bis-3p0' ) ),
-					'data-keep_current_value'     => true,
+					'data-minimum-results-for-search' => 0,
+					'data-minimum-input-length'       => 0,
+					'data-show_for_option_name'       => $option_name . '[ubl_format]',
+					'data-show_for_option_values'     => json_encode( array( 'peppol-bis-3p0' ) ),
+					'data-keep_current_value'         => true,
 				),
 			),
 		);
@@ -354,7 +365,7 @@ class SettingsEDI {
 				'id'                => 'peppol_automatic_endpoint_id_derivation',
 				'description'       => sprintf(
 					/* translators: %s: link to documentation */
-					__( 'Automatically generate Peppol IDs from VAT numbers for supported countries. This can help ensure the correct format and reduce errors. %s', 'woocommerce-pdf-invoices-packing-slips' ),
+					__( 'Look up customer Peppol Endpoint IDs from VAT numbers for the selected billing countries. When the customer field is enabled at checkout, the lookup fills that field during checkout. Otherwise, it runs when the order is created. A matching participant must be found in the Peppol Directory. %s', 'woocommerce-pdf-invoices-packing-slips' ),
 					'<a href="https://docs.wpovernight.com/e-documents/automatic-peppol-endpoint-id-derivation-from-vat-number/" rel="noopener noreferrer" target="_blank">' . __( 'Learn more', 'woocommerce-pdf-invoices-packing-slips' ) . '</a>'
 				),
 				'custom_attributes' => array(
@@ -365,7 +376,7 @@ class SettingsEDI {
 			),
 		);
 
-		$mappings  = wpo_ips_edi_get_peppol_vat_mappings();
+		$mappings  = wpo_ips_edi_get_identifier_mappings();
 		$countries = array();
 
 		if ( is_array( $mappings ) ) {
@@ -374,11 +385,8 @@ class SettingsEDI {
 					continue;
 				}
 
-				$country_mappings = ! empty( $data['mappings'] ) && is_array( $data['mappings'] )
-					? $data['mappings']
-					: array( $data );
-
-				$eas_codes = array();
+				$country_mappings = $data['mappings']['vat_number'] ?? array();
+				$eas_codes        = array();
 
 				foreach ( $country_mappings as $mapping ) {
 					if ( ! is_array( $mapping ) || empty( $mapping['eas'] ) ) {
@@ -424,6 +432,56 @@ class SettingsEDI {
 					'data-show_for_option_name'   => $option_name . '[peppol_automatic_endpoint_id_derivation]',
 					'data-show_for_option_values' => wp_json_encode( array( '1' ) ),
 					'data-keep_current_value'     => true,
+				),
+			),
+		);
+
+		// Supplier Registration Number scheme
+		$settings_fields[] = array(
+			'type'     => 'setting',
+			'id'       => 'registration_number_scheme',
+			'title'    => '',
+			'callback' => 'select',
+			'section'  => $section,
+			'args'     => array(
+				'title'            => __( 'Supplier Registration Number Scheme (ICD)', 'woocommerce-pdf-invoices-packing-slips' ),
+				'option_name'      => $option_name,
+				'id'               => 'registration_number_scheme',
+				'enhanced_select'   => true,
+				'show_empty_option' => true,
+				'custom_attributes' => array(
+					'data-minimum-results-for-search' => 0,
+					'data-minimum-input-length'       => 0,
+				),
+				'default'          => '',
+				'disabled'         => empty( $registration_number ),
+				'options'          => ( function () use ( $default_registration_scheme, $registration_number_label ) {
+					$options = array(
+						'' => '' !== $default_registration_scheme
+							? sprintf(
+								/* translators: %1$s: ICD scheme code, %2$s: registration number label */
+								__( 'Automatic ([%1$s] %2$s)', 'woocommerce-pdf-invoices-packing-slips' ),
+								$default_registration_scheme,
+								$registration_number_label
+							)
+							: __( 'Automatic (no scheme)', 'woocommerce-pdf-invoices-packing-slips' ),
+					);
+
+					foreach ( EN16931::get_icd() as $code => $label ) {
+						$options[ $code ] = "[$code] $label";
+					}
+
+					return $options;
+				} )(),
+				'description'      => sprintf(
+					'%1$s<br>%2$s',
+					sprintf(
+						/* translators: %1$s: registration number label, %2$s: registration number */
+						__( 'This scheme identifies the supplier %1$s in electronic documents. %1$s: %2$s', 'woocommerce-pdf-invoices-packing-slips' ),
+						esc_html( $registration_number_label ),
+						! empty( $registration_number ) ? '<code>' . esc_html( $registration_number ) . '</code>' : esc_html__( 'Not set', 'woocommerce-pdf-invoices-packing-slips' )
+					),
+					__( 'Automatic uses the current Shop Country in General Settings. Select a specific scheme to override it, including after the Shop Country changes.', 'woocommerce-pdf-invoices-packing-slips' )
 				),
 			),
 		);
@@ -610,7 +668,7 @@ class SettingsEDI {
 		);
 
 		$settings_fields = apply_filters( 'wpo_ips_edi_settings', $settings_fields, $page, $option_group, $option_name );
-		WPO_WCPDF()->settings->add_settings_fields( $settings_fields, $page, $option_group, $option_name );
+		WPO_WCPDF()->get_instance( 'settings' )->add_settings_fields( $settings_fields, $page, $option_group, $option_name );
 	}
 
 	/**
@@ -636,6 +694,29 @@ class SettingsEDI {
 					$new[ $key ] = preg_replace( '/^[^:]+:/', '', trim( $val ) );
 				}
 			}
+		}
+
+		return $new;
+	}
+
+	/**
+	 * Preserve a saved scheme when the disabled selector is omitted from the form.
+	 * An explicitly submitted empty value selects Automatic.
+	 *
+	 * @param mixed $value     New settings.
+	 * @param mixed $old_value Previous settings.
+	 * @return array
+	 */
+	public function preserve_registration_number_scheme( $value, $old_value ): array {
+		$new = is_array( $value ) ? $value : array();
+		$old = is_array( $old_value ) ? $old_value : array();
+
+		if (
+			! array_key_exists( 'registration_number_scheme', $new ) &&
+			array_key_exists( 'registration_number_scheme', $old ) &&
+			empty( \WPO_WCPDF()->get_instance( 'settings' )->get_instance( 'general' )->get_setting( 'coc_number' ) )
+		) {
+			$new['registration_number_scheme'] = $old['registration_number_scheme'];
 		}
 
 		return $new;

@@ -915,7 +915,7 @@ abstract class OrderDocumentMethods extends OrderDocument {
 			$line_taxes = $line_tax_data[ $tax_data_key ];
 			foreach ( $line_taxes as $tax_id => $tax ) {
 				if ( isset( $tax ) && '' !== $tax ) {
-					$tax_rate = $this->get_tax_rate_by_id( $tax_id, $order );
+					$tax_rate = is_numeric( $tax_id ) ? $this->get_tax_rate_by_id( (int) $tax_id, $order ) : false;
 					if ( $tax_rate !== false && $force_calculation === false ) {
 						$tax_rates[] = $tax_rate . ' %';
 					} else {
@@ -1677,7 +1677,7 @@ abstract class OrderDocumentMethods extends OrderDocument {
 	 * @return void
 	 */
 	public function invoice_number_title(): void {
-		echo esc_html( $this->get_invoice_number_title() );
+		echo wpo_wcpdf_sanitize_html_content( $this->get_invoice_number_title(), 'title' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- sanitized by wpo_wcpdf_sanitize_html_content()
 	}
 
 	/**
@@ -1703,7 +1703,7 @@ abstract class OrderDocumentMethods extends OrderDocument {
 	 * @return void
 	 */
 	public function refund_reason_title(): void {
-		echo esc_html( $this->get_refund_reason_title() );
+		echo wpo_wcpdf_sanitize_html_content( $this->get_refund_reason_title(), 'title' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- sanitized by wpo_wcpdf_sanitize_html_content()
 	}
 	
 	/**

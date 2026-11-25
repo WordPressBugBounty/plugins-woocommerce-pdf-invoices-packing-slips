@@ -43,6 +43,7 @@ class Admin {
 		add_action( 'add_meta_boxes', array( $this, 'add_meta_boxes' ), 10, 2 );
 		add_filter( 'request', array( $this, 'request_query_sort_by_column' ) );
 		add_action( 'admin_bar_menu', array( $this, 'debug_enabled_warning' ), 999 );
+		add_action( 'admin_notices', array( $this, 'invoice_number_search_fts_notice' ) );
 		
 		// Woo
 		add_filter( 'manage_woocommerce_page_wc-orders_columns', array( $this, 'add_invoice_columns' ), 200 ); // WC 7.1+ (we lowered the priority to 200 to make sure it works with Admin Columns plugin: https://www.admincolumns.com/)
@@ -55,9 +56,6 @@ class Admin {
 		add_filter( 'bulk_actions-woocommerce_page_wc-orders', array( $this, 'bulk_actions' ), 20 ); // WC 7.1+
 		add_filter( 'woocommerce_order_table_search_query_meta_keys', array( $this, 'search_fields' ) ); // HPOS specific filter
 		add_filter( 'woocommerce_shop_order_search_fields', array( $this, 'search_fields' ) );
-		add_filter( 'woocommerce_rest_prepare_report_orders', array( $this, 'add_invoice_number_to_order_report' ) );
-		add_filter( 'woocommerce_report_orders_export_columns', array( $this, 'add_invoice_number_header_to_order_export' ) );
-		add_filter( 'woocommerce_report_orders_prepare_export_item', array( $this, 'add_invoice_number_value_to_order_export' ), 10, 2 );
 		add_action( 'manage_woocommerce_page_wc-orders_custom_column', array( $this, 'invoice_columns_data' ), 10, 2 ); // WC 7.1+
 		add_action( 'woocommerce_admin_order_actions_end', array( $this, 'add_listing_actions' ) );
 		add_action( 'manage_shop_order_posts_custom_column', array( $this, 'invoice_columns_data' ), 10, 2 );
@@ -84,7 +82,7 @@ class Admin {
 	 * @return void
 	 */
 	public function setup_wizard(): void {
-		if ( ! empty( $_GET['page'] ) && 'wpo-wcpdf-setup' === $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! empty( $_GET['page'] ) && 'wpo-wcpdf-setup' === $_GET['page'] && WPO_WCPDF()->get_instance( 'settings' )->user_can_manage_settings() ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			delete_transient( 'wpo_wcpdf_new_install' );
 			WPO_WCPDF()->get_instance( 'setup_wizard' );
 		}
@@ -376,6 +374,67 @@ class Admin {
 		return isset( $invoice_settings[ $setting_key ] );
 	}
 
+	/**
+	 * Check if HPOS is in use and its full-text search index is enabled.
+	 *
+	 * While the index is enabled, WooCommerce does not search order meta (so also not the invoice
+	 * number keys added through 'woocommerce_order_table_search_query_meta_keys') for the "All"
+	 * and "Customers" order search filters; the "Invoice numbers" filter remains available instead.
+	 *
+	 * @return bool
+	 */
+	public function hpos_fulltext_search_enabled(): bool {
+		if ( ! WPO_WCPDF()->get_instance( 'order_util' )->custom_orders_table_usage_is_enabled() ) {
+			return false;
+		}
+
+		// Option names match CustomOrdersTableController::HPOS_FTS_INDEX_OPTION and
+		// HPOS_FTS_ADDRESS_INDEX_CREATED_OPTION (WooCommerce 9.0+); literals are used so older
+		// WooCommerce versions without that class keep working.
+		return 'yes' === get_option( 'woocommerce_hpos_fts_index_enabled' )
+			&& 'yes' === get_option( 'woocommerce_hpos_address_fts_index_created' );
+	}
+
+	/**
+	 * Show a notice on the orders list when a search with the "All" filter cannot match invoice
+	 * numbers because the HPOS full-text search index is enabled.
+	 *
+	 * @return void
+	 */
+	public function invoice_number_search_fts_notice(): void {
+		if ( ! $this->invoice_number_search_enabled() || ! $this->hpos_fulltext_search_enabled() ) {
+			return;
+		}
+
+		global $pagenow;
+		$page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display check.
+		if ( ! ( 'admin.php' === $pagenow && 'wc-orders' === $page ) ) {
+			return;
+		}
+
+		$search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display check.
+		// The orders list table submits the search filter as the hyphenated 'search-filter' request var
+		// (mapped to the 'search_filter' query arg internally by WooCommerce).
+		$search_filter = isset( $_GET['search-filter'] ) ? sanitize_key( wp_unslash( $_GET['search-filter'] ) ) : 'all'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display check.
+		if ( '' === $search || ! in_array( $search_filter, array( 'all', '' ), true ) ) {
+			return;
+		}
+
+		$url = add_query_arg(
+			array(
+				'page'          => 'wc-orders',
+				's'             => $search,
+				'search-filter' => 'invoice_numbers',
+			),
+			admin_url( 'admin.php' )
+		);
+
+		echo '<div class="notice notice-info is-dismissible"><p>';
+		echo esc_html__( 'The "All" search option does not include invoice numbers while the WooCommerce HPOS full-text search index is enabled.', 'woocommerce-pdf-invoices-packing-slips' );
+		echo ' <a href="' . esc_url( $url ) . '">' . esc_html__( 'Search with the "Invoice numbers" option instead', 'woocommerce-pdf-invoices-packing-slips' ) . '</a>';
+		echo '</p></div>';
+	}
+
 
 	/**
 	 * Makes invoice columns sortable
@@ -427,11 +486,11 @@ class Admin {
 	/**
 	 * Add the meta boxes on the single order page
 	 *
-	 * @param string $wc_screen_id        Can be also $post_type
-	 * @param \WC_Abstract_Order|\WP_Post $post_or_order_object
+	 * @param string $wc_screen_id             Can be also $post_type
+	 * @param \WC_Abstract_Order|\WP_Post|null $post_or_order_object
 	 * @return void
 	 */
-	public function add_meta_boxes( string $wc_screen_id, object $post_or_order_object ): void {
+	public function add_meta_boxes( string $wc_screen_id, ?object $post_or_order_object ): void {
 		if ( WPO_WCPDF()->get_instance( 'order_util' )->custom_orders_table_usage_is_enabled() ) {
 			$screen_id = wc_get_page_screen_id( 'shop-order' );
 		} else {
@@ -2025,48 +2084,6 @@ class Admin {
 	}
 
 	/**
-	 * Add invoice number to the order report response.
-	 *
-	 * @param \WP_REST_Response $response The REST API response object.
-	 * @return \WP_REST_Response Modified REST API response object with invoice number included.
-	 */
-	public function add_invoice_number_to_order_report( \WP_REST_Response $response ): \WP_REST_Response {
-		$order = wc_get_order( $response->data['order_id'] );
-		if ( ! empty( $order ) ) {
-			$response->data['invoice_number'] = $order->get_meta( '_wcpdf_invoice_number' );
-		}
-
-		return $response;
-	}
-
-	/**
-	 * Add invoice number header to the order export columns.
-	 *
-	 * @param array $export_columns The existing export columns.
-	 * @return array Modified export columns with invoice number header included.
-	 */
-	public function add_invoice_number_header_to_order_export( array $export_columns ): array {
-		$export_columns['invoice_number'] = __( 'Invoice Number', 'woocommerce-pdf-invoices-packing-slips' );
-
-		return $export_columns;
-	}
-
-	/**
-	 * Add invoice number value to the order export data.
-	 *
-	 * @param array $export_item The existing export item data.
-	 * @param array $item The original item data containing the order information.
-	 * @return array Modified export item data with invoice number included.
-	 */
-	public function add_invoice_number_value_to_order_export( array $export_item, array $item ): array {
-		if ( ! empty( $item['invoice_number'] ) ) {
-			$export_item['invoice_number'] = $item['invoice_number'];
-		}
-
-		return $export_item;
-	}
-
-	/**
 	 * Add invoice date and number columns to the sortable columns in the admin order list.
 	 *
 	 * @param array $columns The existing sortable columns.
@@ -2295,9 +2312,9 @@ class Admin {
 									continue;
 								}
 
-								$value    = $identifier['value'];
-								$required = $identifier['required'];
-								$display  = $value ?: sprintf(
+								$value         = $identifier['value'];
+								$required      = $identifier['required'];
+								$fallback_span = sprintf(
 									'<span class="%s">%s</span>',
 									$required
 										? 'missing'
@@ -2312,7 +2329,7 @@ class Admin {
 									<td><?php echo esc_html( $identifier['label'] ); ?></td>
 								<?php endif; ?>
 									<td>
-										<?php echo wp_kses_post( $display ); ?>
+										<?php echo $value ? esc_html( $value ) : wp_kses_post( $fallback_span ); ?>
 									</td>
 								</tr>
 								<?php
@@ -2327,10 +2344,10 @@ class Admin {
 										continue;
 									}
 
-									$identifier = $identifiers_data[ $identifier_key ];
-									$value      = $identifier['value'];
-									$required   = $identifier['required'];
-									$display    = $value ?: sprintf(
+									$identifier    = $identifiers_data[ $identifier_key ];
+									$value         = $identifier['value'];
+									$required      = $identifier['required'];
+									$fallback_span = sprintf(
 										'<span class="%s">%s</span>',
 										$required
 											? 'missing'
@@ -2345,7 +2362,7 @@ class Admin {
 										<td><?php echo esc_html( $identifier['label'] ); ?></td>
 									<?php endif; ?>
 									<td>
-										<?php echo wp_kses_post( $display ); ?>
+										<?php echo $value ? esc_html( $value ) : wp_kses_post( $fallback_span ); ?>
 
 										<?php if ( 'vat_number' === $identifier_key && ! empty( $value ) && ! wpo_ips_edi_vat_number_has_country_prefix( $value ) ) : ?>
 											<br>
@@ -2374,9 +2391,9 @@ class Admin {
 						<tbody>
 							<?php
 								foreach ( $peppol_identifiers as $key => $identifier ) {
-									$value    = $identifier['value'];
-									$required = $identifier['required'];
-									$display  = $value ?: sprintf(
+									$value         = $identifier['value'];
+									$required      = $identifier['required'];
+									$fallback_span = sprintf(
 										'<span style="color:%s">%s</span>',
 										$required
 											? '#d63638'
@@ -2388,7 +2405,7 @@ class Admin {
 									?>
 									<tr>
 										<td><?php echo esc_html( $identifier['label'] ); ?></td>
-										<td class="display"><?php echo wp_kses_post( $display ); ?></td>
+										<td class="display"><?php echo $value ? esc_html( $value ) : wp_kses_post( $fallback_span ); ?></td>
 										<td class="edit">
 											<input type="text" name="<?php echo esc_attr( $key ); ?>" value="<?php echo esc_attr( $value ); ?>">
 										</td>
